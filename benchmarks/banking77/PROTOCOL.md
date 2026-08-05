@@ -105,7 +105,7 @@ authority/provider/external effect occurs during the scored phase.
 
 This benchmark does not establish:
 
-- performance on HSBC or private customer data;
+- performance on private institutional or customer data;
 - production routing quality, customer benefit, or operational readiness;
 - demographic fairness, accessibility, or regulatory compliance;
 - LLM, latent-state, or private Qwen reproduction;

@@ -1,6 +1,6 @@
 # BANKING77 client-intent and audited-handoff benchmark
 
-This reviewer-runnable benchmark adds a real public machine-learning task to
+This reproducible benchmark adds a real public machine-learning task to
 Waggle + Kea. It trains matched classical intent classifiers on the official
 BANKING77 split, evaluates a leakage-controlled test population, and then
 passes the frozen predictions through direct, JSON, and Waggle/Kea handoffs.

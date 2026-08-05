@@ -1,7 +1,7 @@
 {
   "name": "waggle-kea",
-  "version": "0.1.2",
-  "description": "Fixture-only reference implementation of the Waggle v0 coordination protocol and Kea audit layer.",
+  "version": "0.2.0",
+  "description": "Inspectable machine coordination with a deterministic protocol, fail-closed audit layer, and reproducible ML evaluation.",
   "type": "module",
   "license": "MIT",
   "author": "William Keenan",
@@ -40,13 +40,19 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=75 tests/*.test.ts",
+    "verify:benchmark": "node scripts/verify-banking77-benchmark.mjs",
     "verify:research": "node research/verify.mjs",
-    "check": "npm run typecheck && npm test && npm run build && node dist/kea/cli.js evaluate && npm run verify:research",
+    "audit:dependencies": "npm audit --audit-level=high",
+    "benchmark:banking77": "node scripts/run-banking77.mjs",
+    "smoke:package": "node scripts/package-smoke.mjs",
+    "check": "npm run typecheck && npm run test:coverage && npm run build && node dist/kea/cli.js evaluate && npm run verify:benchmark && npm run verify:research && npm run audit:dependencies && npm run smoke:package",
+    "reproduce": "npm run check",
     "demo": "tsx examples/demo.ts",
     "kea": "tsx src/kea/cli.ts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",

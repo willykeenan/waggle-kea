@@ -28,7 +28,7 @@ test("classification and handoff results remain separate, bounded claims", () =>
   assert.ok(["H1_SUPPORTED_EXPLORATORY", "H0_RETAINED"].includes(run.scientificVerdict));
   assert.equal(run.effects.providerApiCalls, 0);
   assert.equal(run.effects.authorityEffectsExecuted, 0);
-  assert.ok(run.nonClaims.some((claim: string) => claim.includes("HSBC")));
+  assert.ok(run.nonClaims.some((claim: string) => claim.includes("private institutional")));
   assert.ok(run.nonClaims.some((claim: string) => claim.includes("private Qwen")));
 
   assert.equal(handoff.status, "passed");

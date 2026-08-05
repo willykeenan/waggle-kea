@@ -15,4 +15,4 @@ Please cite:
 
 The benchmark redistributes no BANKING77 query text in its committed result
 artifacts. It downloads and verifies the upstream files into an ignored local
-cache when a reviewer elects to reproduce the run.
+cache when a user reproduces the run.

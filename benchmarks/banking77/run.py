@@ -577,7 +577,7 @@ def main() -> int:
         "H1_SUPPORTED_EXPLORATORY" if paired_delta > 0 and delta_interval[0] > 0 else "H0_RETAINED"
     )
     non_claims = [
-        "No HSBC or private customer data were used.",
+        "No private institutional or customer data were used.",
         "No production routing, customer-benefit, or operational-readiness claim is made.",
         "No demographic fairness, accessibility, or regulatory-compliance claim is made.",
         "No LLM, latent-state, private Qwen, or native-state reproduction claim is made.",

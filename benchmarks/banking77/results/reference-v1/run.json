@@ -855,7 +855,7 @@
   "evidenceClass": "exploratory-public-benchmark",
   "generatedAt": "2026-08-05T18:42:39.560926+00:00",
   "nonClaims": [
-    "No HSBC or private customer data were used.",
+    "No private institutional or customer data were used.",
     "No production routing, customer-benefit, or operational-readiness claim is made.",
     "No demographic fairness, accessibility, or regulatory-compliance claim is made.",
     "No LLM, latent-state, private Qwen, or native-state reproduction claim is made.",

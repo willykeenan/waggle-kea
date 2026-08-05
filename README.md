@@ -1,85 +1,123 @@
 # Waggle + Kea
 
 [![CI](https://github.com/willykeenan/waggle-kea/actions/workflows/ci.yml/badge.svg)](https://github.com/willykeenan/waggle-kea/actions/workflows/ci.yml)
+[![BANKING77 benchmark](https://github.com/willykeenan/waggle-kea/actions/workflows/benchmark.yml/badge.svg)](https://github.com/willykeenan/waggle-kea/actions/workflows/benchmark.yml)
+[![CodeQL](https://github.com/willykeenan/waggle-kea/actions/workflows/codeql.yml/badge.svg)](https://github.com/willykeenan/waggle-kea/actions/workflows/codeql.yml)
 
-An open-source, fixture-only reference implementation for inspectable machine
-coordination.
+Inspectable machine coordination, a fail-closed audit layer, and a reproducible
+banking intent-classification benchmark.
 
 - **Waggle** defines compact, typed coordination packets built from symbolic
   state deltas and content-addressed references.
-- **Kea** separately registers the codec, decodes and verifies each packet,
-  records a hash-chained replay trail, exposes uncertainty and failures, and
-  never grants execution authority.
+- **Kea** qualifies each handoff, records a hash-chained replay trail, exposes
+  failures, and never grants execution authority.
+- **The BANKING77 benchmark** trains matched classifiers on public banking
+  queries, measures uncertainty and selective routing, and audits every frozen
+  prediction through direct, JSON, and Waggle/Kea paths.
 
-The point is not to make machine communication mysterious. The point is to
-test whether coordination can become smaller and more structured while
-remaining legible, replayable, and fail-closed.
+## Results at a glance
 
-## What is implemented
+| Evaluation | Result | Boundary |
+| --- | --- | --- |
+| Primary ML comparison | Macro-F1 `0.8915 → 0.9119`; paired delta `+0.0203`, 95% bootstrap interval `[+0.0140, +0.0274]` | Exploratory, test-informed design; not confirmatory |
+| Data controls | 3,050 unique, unambiguous test cases after removing 25 normalized train/test overlaps | Official BANKING77 data; no private institutional or customer data |
+| Negative control | Shuffled-label macro-F1 `0.0095` | Passed the frozen `≤ 0.05` leakage tripwire |
+| Typo stress | Candidate macro-F1 `0.8565`; word-only `0.7728` | One deterministic synthetic deletion, not natural-noise validation |
+| Audited handoff | 3,050/3,050 routes agreed; 0 clean rejections; 0 authority grants | Exact routing parity is not a model-quality claim |
+| Fault suite | 384/384 specified detectable mutations rejected; 0 false accepts | Finite suite, not adversarial-security validation |
 
-- Canonical JSON encoding and SHA-256 content identity.
-- A schema-constrained Waggle v0 packet format that rejects prose-bearing
-  payload fields and invalid symbolic values.
-- Deterministic encode/decode and sequence or bundle composition.
-- A Kea codec registry with immutable, integrity-checked manifests.
-- Exact decoder qualification for deterministic Waggle v0 fixtures.
-- Hash-chained message, interpretation, and correction history.
-- Idempotent ingest and collision rejection.
-- Unknown-codec, payload-size, out-of-distribution, and undecodable-capacity
-  failure modes.
-- A local CLI, read-only HTTP viewer, replay API, and deterministic evaluation
-  harness.
-- Zero model calls, network calls, or authority execution in the tests.
+The complete result includes all five fixed seeds, 2,000 paired bootstrap
+draws, accuracy, top-3 accuracy, log loss, multiclass Brier score, 15-bin ECE,
+risk–coverage curves, all 77 per-intent scores, a shuffled-label control, and
+text-free case-level predictions. See
+[`benchmarks/banking77/`](benchmarks/banking77/README.md).
 
-## Architecture
+## Reproduce
+
+Requires Node.js 22 or 24. The fast path validates the implementation, coverage
+gates, committed ML evidence, research checksums, dependency audit, and packed
+consumer interface:
+
+```bash
+npm ci
+npm run reproduce
+```
+
+To retrain the matched classifiers and generate a fresh local result:
+
+```bash
+npm run benchmark:banking77
+```
+
+The first benchmark run creates an ignored Python environment, installs the
+pinned scientific stack, and downloads three digest-verified files from the
+pinned official BANKING77 commit. Generated results go to an ignored local
+directory, so reproduction does not rewrite the committed reference.
+
+## Evaluation design
 
 ```mermaid
 flowchart LR
-    A[Typed state delta] --> B[Waggle v0 encoder]
-    B --> C[Canonical packet + content hash]
-    C --> D[Kea registry and decoder]
-    D --> E{Qualification}
-    E -- verified --> F[Human gloss + proposed delta]
-    E -- ambiguous or invalid --> G[Reject or abstain]
-    F --> H[Hash-chained replay ledger]
-    G --> H
-    H --> I[CLI, API, and local viewer]
+    A[Pinned BANKING77 source] --> B[Normalize only for duplicate audit]
+    B --> C[Remove ambiguous and train-overlap groups]
+    C --> D1[Word TF-IDF + SGD]
+    C --> D2[Word + character TF-IDF + matched SGD]
+    D1 --> E[Paired metrics and bootstrap]
+    D2 --> E
+    D2 --> F[Frozen text-free predictions]
+    F --> G1[Direct record]
+    F --> G2[Canonical JSON]
+    F --> G3[Waggle packet]
+    G3 --> H[Kea qualification and atomic ledger]
+    G1 --> I[Compare routes]
+    G2 --> I
+    H --> I
+    I --> J[Human-review boundary; no authority]
 ```
 
-Kea's interpretation is an observable artifact, not an action. Any real system
-using the protocol would still need a separate authorization and execution
-boundary.
+The primary comparison changes only the feature representation: word
+unigrams/bigrams versus the same word features plus character-boundary
+3–5-grams. Both use the same seeded log-loss SGD configuration. The design is
+explicitly exploratory because aggregate test performance informed the first
+public protocol.
 
-## Quickstart
+## Protocol and failure behavior
 
-Requires Node.js 20 or newer.
+Waggle v0 uses canonical JSON, SHA-256 content identity, symbolic tokens, and
+closed-world runtime schemas. Kea treats decoded output as an inspectable
+artifact rather than permission to act.
 
-This is currently a source-first GitHub release, not a published npm package.
-Clone the repository and run the commands below from its root.
+| Boundary | Behavior |
+| --- | --- |
+| Unknown fields or invalid symbolic values | Rejected before ledger mutation |
+| Payload hash or byte-count mismatch | Rejected before decoding |
+| Reused message ID or idempotency-key collision | Exact retry replays; altered content fails closed |
+| Missing, duplicate, self, or cross-mission causal parent | Rejected |
+| Message/interpretation persistence | Committed as one guarded atomic ledger batch |
+| Deterministic decoder mismatch | Rejected; decoder-reported parity is diagnostic only |
+| Policy verification | Explicitly `not-evaluated` unless an independent check ran |
+| HTTP boundary | Typed safe errors, strict limits, read-only by default, opt-in fixture writes |
+| Authority | `authorityGranted` is always `false`; tests execute zero effects |
+
+Content hashes and hash chaining detect accidental or retrospective mutation;
+they do not authenticate a permitted writer. The benchmark includes a fully
+rehashed forged-payload control and correctly records that limitation as
+undetected without a separate trust root.
+
+## Use the reference implementation
+
+This is a source-first GitHub release, not a published npm package.
 
 ```bash
-npm install
-npm run check
 npm run demo
-```
-
-Run the standalone Kea evaluation:
-
-```bash
 npm run kea -- evaluate
-```
-
-Start the local fixture viewer:
-
-```bash
 npm run kea -- serve --port 7462
 ```
 
-Fixture writes are disabled by default. To deliberately add a sanitized local
-fixture, restart with `--allow-fixtures` and use the documented fixture-only
-API or CLI.
-
-## Example
+Fixture writes are disabled by default. The local viewer exposes health,
+registry, message-list, replay, and deterministic-evaluation routes. Restart
+with `--allow-fixtures` only when deliberately exercising sanitized local
+fixture writes.
 
 ```ts
 import {
@@ -113,47 +151,37 @@ const message = createWaggleV0Message({
 const { service } = createWaggleV0FixtureKea();
 const result = service.ingest(message);
 console.log(result.interpretation.disposition); // verified
+console.log(result.interpretation.authorityGranted); // false
 ```
-
-## Research status
-
-This release demonstrates a deterministic protocol and audit harness on
-sanitized fixtures. It is not a learned latent language and it does not
-establish lower total cost, lower latency, better task outcomes, production
-readiness, cross-model compatibility, or security under adversarial traffic.
-
-Those are empirical questions. A credible comparison requires matched models,
-tasks, tools, context, stopping rules, quality review, complete resource
-accounting, and Kea's decoding overhead included in the total.
-
-## Explicit non-claims
-
-This repository does **not** claim:
-
-- access to private model reasoning, hidden states, or provider caches;
-- that arbitrary models share a universal latent language;
-- token, cost, latency, memory, or energy savings;
-- production Agent traffic or autonomous execution;
-- that a decoded message grants permission to act;
-- quantum computation or quantum speedup.
-
-## Related research
-
-The companion [`research/`](research/README.md) package
-documents the broader research ladder, controls, bounded results, negative
-results, and claim ledger.
 
 ## Repository map
 
 | Path | Purpose |
 | --- | --- |
+| [`benchmarks/banking77/`](benchmarks/banking77/README.md) | Reproducible classifier, protocol, controls, reference results, and audited handoff |
 | `src/waggle/` | Typed packets, validation, encoding, composition, and message construction |
-| `src/kea/` | Registry, decoder service, replay ledger, evaluation, CLI, API, and viewer |
-| `examples/demo.ts` | End-to-end sanitized coordination fixture |
-| `tests/` | Deterministic protocol, audit, and failure-mode tests |
-| `CITATION.cff` | Citation metadata |
-| `SECURITY.md` | Security boundary and reporting guidance |
+| `src/kea/` | Registry, qualification service, atomic replay ledger, CLI, API, and viewer |
+| `tests/` | Protocol-integrity, HTTP-boundary, benchmark-evidence, and failure-mode tests |
+| [`research/`](research/README.md) | Separate bounded native-prefix pilot, negative result, and claim ledger |
+| `scripts/` | Evidence verification and clean package-consumer smoke tests |
 
-## License
+## Limits and non-claims
 
-MIT. See [`LICENSE`](LICENSE).
+The public BANKING77 result does not establish performance on private customer
+data, production routing quality, customer benefit, demographic fairness,
+accessibility, regulatory compliance, cross-domain generalization, or natural
+noise robustness. The protocol is fixture-only and is not an authorization or
+production-security boundary.
+
+The separate native-prefix pilot in [`research/`](research/README.md) reports
+one model/hardware run that beat repeated full-text reconstruction but did not
+beat the stronger cached-prefix or warmed fresh-native controls. It does not
+establish a universal agent language, cross-model compatibility, or token,
+cost, latency, memory, energy, or overall-efficiency savings.
+
+## License and citation
+
+Code is MIT licensed. Research text is CC BY 4.0. BANKING77 attribution and its
+CC BY 4.0 source license are recorded in
+[`THIRD_PARTY_NOTICES.md`](benchmarks/banking77/THIRD_PARTY_NOTICES.md).
+Citation metadata is provided in [`CITATION.cff`](CITATION.cff).

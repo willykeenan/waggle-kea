@@ -1,6 +1,6 @@
 {
   "name": "waggle-kea",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Fixture-only reference implementation of the Waggle v0 coordination protocol and Kea audit layer.",
   "type": "module",
   "license": "MIT",

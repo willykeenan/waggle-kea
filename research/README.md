@@ -30,7 +30,7 @@ separate from an unsupported performance claim.
 | File | Purpose |
 | --- | --- |
 | [`PAPER.md`](PAPER.md) | Concise manuscript for scholarly review and future preprint submission |
-| [`RESEARCH-METHOD.md`](RESEARCH-METHOD.md) | Frozen literature-review and claim-grading method |
+| [`RESEARCH-METHOD.md`](RESEARCH-METHOD.md) | Public evaluation, admission, falsification, and release method |
 | [`CLAIM-LEDGER.md`](CLAIM-LEDGER.md) | Allowed wording, evidence class, and explicit non-claims |
 | [`RESULTS-C15D.md`](RESULTS-C15D.md) | Bounded local model/hardware result, controls, and limitations |
 | [`data/c15d-summary.json`](data/c15d-summary.json) | Machine-readable aggregate of the reported experiment |

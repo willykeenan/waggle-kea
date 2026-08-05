@@ -54,6 +54,9 @@ boundary.
 
 Requires Node.js 20 or newer.
 
+This is currently a source-first GitHub release, not a published npm package.
+Clone the repository and run the commands below from its root.
+
 ```bash
 npm install
 npm run check

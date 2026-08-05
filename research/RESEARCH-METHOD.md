@@ -1,218 +1,113 @@
-# Waggle literature research method
+# Waggle + Kea public evaluation method
 
-Status: bounded landscape-review method
-Review window: 2026-07-10 through 2026-07-11
-Paper author: William Keenan
-Release note: v0.4 retains this frozen v0.3 literature review unchanged and
-adds local hardware/model evidence; it does not extend the search cutoff.
+Status: bounded reporting protocol
+
+Author: William Keenan
+
+Scope: the public fixture implementation and the frozen C15d aggregate
 
 ## Purpose
 
-This method supports a publication-candidate landscape review. It is designed
-to:
+This document states how evidence enters the public Waggle + Kea package. It
+is a reporting protocol, not a systematic literature review, peer review,
+patent search, or independent replication.
 
-1. separate source-reported results from Waggle evidence;
-2. identify direct prior art, counterevidence, safety work, and adjacent work;
-3. prevent a bounded search from becoming an absolute novelty claim;
-4. pin citations to the revisions used for v0.3.
+The method is designed to keep four questions separate:
 
-It is not a systematic review under PRISMA, a meta-analysis, a patent search,
-legal advice, or proof of priority.
+1. Does the public packet format reconstruct its deterministic fixtures?
+2. Does Kea reject invalid or incompatible messages and remain authority-free?
+3. Did model-native state reuse work in the one frozen local experiment?
+4. Did that mechanism beat the strongest matched performance controls?
 
-## Source hierarchy
+A positive answer to one question never supplies a positive answer to another.
 
-Technical claims use, in order of preference:
+## Evidence classes
 
-1. the paper or version-of-record page;
-2. the authors’ official preprint record;
-3. an official project implementation where implementation is the claim.
+| Class | Meaning | Public treatment |
+| --- | --- | --- |
+| Public fixture | Reproducible from this repository without a model or network | May describe only the tested schema, decoder, and failure behavior |
+| Bounded local aggregate | Result from the frozen C15d run, published without raw native state or the full execution corpus | May report exact model, hardware, task count, controls, measurements, and limitations |
+| Hypothesis | A falsifiable claim awaiting a registered experiment | Must be written as a future test, never as a result |
+| Non-claim | A tempting inference the evidence does not establish | Must remain explicitly rejected |
 
-Business facts use company or program primary sources. Marketing claims from
-those pages are attributed to the company and are not treated as independent
-technical validation.
+## Public fixture evaluation
 
-Secondary explainers, search snippets, Wikipedia, and press summaries are not
-the final support for a technical claim. v0.3 replaced the DisCoCat Wikipedia
-link with the original paper and added the primary lambeq paper.
+The reference implementation is evaluated with sanitized deterministic
+fixtures. A passing run requires:
 
-## Search lanes
+- exact canonical encode/decode round trips;
+- content-hash and byte-count verification;
+- a registered codec manifest matching the complete compatibility envelope;
+- rejection of unknown codecs, malformed schemas, invalid paths, oversized
+  payloads, excessive nesting or collections, and decoder disagreement;
+- deterministic replay through the single-writer hash-chained ledger; and
+- zero model calls, network calls, or authority effects.
 
-The review used five query families and backward/forward adjacency from known
-papers:
+The fixture result establishes implementation behavior only. It does not
+establish semantic generalization, production safety, or model performance.
 
-### A. Latent inter-model communication
+## Frozen C15d comparison
 
-Query concepts included:
+The C15d aggregate covers one Qwen3-14B Q6_K model on one Apple M4 Max Metal
+path across six source-separated tasks. The comparison contains five informed
+arms and one no-state control:
 
-- “latent communication LLM multi-agent”
-- “KV cache direct semantic communication models”
-- “activation communication language model agents”
-- “hidden state inter-agent communication”
-- “latent collaboration multi-agent systems”
-- “embedding multi-agent debate”
+1. one resident context with a restored native prefix;
+2. one resident context with a cached readable-text prefix;
+3. one resident context rebuilt from full text for each branch;
+4. six warmed fresh processes using native restore;
+5. six fresh processes using full text; and
+6. a no-state consumer required to abstain.
 
-### B. Continuous reasoning and multi-hypothesis claims
+Every informed arm had to produce exact outputs on all six tasks. All observed
+startup, restore, and Kea costs remained in the aggregate. The registered
+comparison was cumulative wall time at each branch, with no post-hoc removal of
+the first-load order effect.
 
-Query concepts included:
+## Admission rules
 
-- “continuous chain of thought superposition”
-- “reasoning by superposition continuous thought”
-- “illusion of superposition latent reasoning”
-- “continuous latent reasoning breadth first search”
+The mechanism claim is admitted only if native state restores successfully,
+all six outputs are exact, every Kea qualification passes, and replay adds no
+model work or authority effect.
 
-### C. Deciphering, safety, and covert capacity
+A performance claim is admitted only against the specifically named arm and
+branch horizon it beats. Failure to beat cached-prefix text or warmed
+fresh-native controls rejects any overall-efficiency claim even if a weaker
+full-text comparator is crossed.
 
-Query concepts included:
+Smaller branch-query bytes do not establish lower token use, memory, energy,
+credits, cost, or end-to-end resource consumption. Retained native state and
+qualification overhead must remain visible.
 
-- “translate emergent communication neuralese”
-- “decode LLM latent representations probe”
-- “latent communication attack KV cache”
-- “safe latent communication guard”
-- “AI agent steganography collusion”
+## Threats and falsification
 
-### D. Complex, phase, vector-symbolic, and quantum-adjacent work
+The current aggregate is vulnerable to startup order, OS cache and thermal
+effects, a six-task correlated sample, fixture dependence, and one
+model/hardware configuration. Raw native state and the full execution corpus
+are not public, so the result is internally inspectable but not independently
+reproducible.
 
-Query concepts included:
+The next falsifying experiment must counterbalance arm order, publish raw
+per-run measurements and exact fixtures, include every startup and Kea cost,
+and preregister a repeated-run uncertainty rule. The strongest control remains
+resident cached-prefix text. A tie or loss is a valid result.
 
-- “Fourier holographic reduced representation phasor”
-- “vector symbolic architecture survey”
-- “Kuramoto oscillatory neurons”
-- “semantic phase locking language”
-- “DisCoCat lambeq quantum NLP”
-- “quantum multi-agent reinforcement learning entanglement”
+## Required non-claims
 
-### E. Commercial adjacency
+This package does not establish a learned or universal agent language, hidden
+chain-of-thought transfer, semantic advantage, cross-model or cross-hardware
+generalization, production readiness, independent replication, or token,
+credit, cost, memory, energy, or overall-efficiency savings. Kea qualification
+never grants execution authority.
 
-Company and program sources were checked for:
+## Release procedure
 
-- KV-cache productization and disclosed funding;
-- prompt-compression middleware;
-- quantum-inspired model compression;
-- claimed product scope and release date.
+Before a public release:
 
-These searches test adjacency only. They do not establish a market for Waggle
-or Kea.
-
-## Inclusion and exclusion
-
-Included:
-
-- work that changes the representation transmitted between machine agents or
-  models;
-- continuous-reasoning work directly relevant to multi-hypothesis claims;
-- translation, probing, or identifiability work relevant to Kea;
-- security work that tests latent attacks, leakage, or covert channels;
-- complex/vector/phase methods that motivate a precisely defined experiment;
-- primary commercial sources cited only for dated company facts.
-
-Excluded from direct evidence:
-
-- ordinary prompt compression as proof of latent communication;
-- generic observability products as proof of latent deciphering;
-- model-weight compression as proof of agent-protocol economics;
-- optical compression as a canonical transport;
-- quantum-language analogy as evidence for classical efficiency;
-- uncited personal anecdotes as general results.
-
-## Claim grading
-
-| Grade | Meaning | Paper treatment |
-|---|---|---|
-| A | Version-of-record or mature primary result directly supports the scoped statement | May say “the study reports,” with task/model scope |
-| B | Primary preprint or official source supports the scoped statement | Label preprint/company source and preserve uncertainty |
-| C | Adjacent mechanism or analogy | May motivate an experiment; cannot support an outcome claim |
-| D | Internal fixture or proposal | Describe exact artifact and limits; no external generalization |
-
-Counterevidence is never downgraded because it conflicts with the thesis.
-
-## v0.2 source audit disposition
-
-The original 29-entry bibliography was reviewed source by source.
-
-- References 1–8 were retained with current titles, revisions, venues, and
-  scoped metrics.
-- Reference 9 was retained as an 18-method, single-author preprint survey; its
-  existence does not prove global absence of products or decoders.
-- Reference 10 was corrected to Zhuokai Zhao and narrowed from universal
-  decipherability to identifiability under stated assumptions.
-- References 11 and 12 received their actual paper titles and abstract pages.
-- Reference 13 was retained as within-network synchronization evidence only.
-- The former reference 14 bundled three works. It was split into Plate, Frady
-  et al., and Kleyko et al.
-- Reference 15 was updated to the complete title and v4’s explicit scale
-  limitation.
-- References 16–18 were replaced or supplemented with primary arXiv papers;
-  the Wikipedia DisCoCat link was removed.
-- Reference 19 was retained but narrowed from “message-free coordination” to
-  its stated quantum-channel architecture.
-- The two works bundled under former reference 20 were split and cited in the
-  body as real decoder prior art.
-- Former reference 21 is now cited as adjacent representation probing.
-- Former reference 22 now uses Tensormesh’s official May 2026 announcement,
-  which states $24.5 million total funding.
-- References 23 and 24 remain commercial adjacency only.
-- Reference 25 was updated to the current title/revision and its limited
-  capability finding is preserved.
-- Reference 26 no longer supports a claim about production-model
-  superposition; it is explicitly a toy-model result.
-- Reference 27 now links the Nature AlphaQubit paper.
-- Reference 28 remains an attributed company announcement; the paper no
-  longer generalizes its method into a multi-year reinforcement-learning
-  program.
-- Reference 29 now has authors, title, and a primary link, and is paired with
-  a direct counterevaluation of optical compression.
-
-The resulting v0.3 bibliography contains 33 separately addressable entries.
-Every reference is cited in the paper body.
-
-## Metric verification
-
-Headline numbers were checked against the cited primary abstract or official
-record. In particular:
-
-- Cache-to-Cache v2 reports approximately 3.1–5.4% improvement over its text
-  communication comparison and an average 2.5× latency speedup.
-- Communicating Activations reports up to 27% improvement with less than
-  one-quarter of the compute in its tested setups.
-- LatentMAS v3 reports 70.8–83.7% fewer output tokens and up to 14.6% higher
-  accuracy across its reported suite.
-- CIPHER reports 0.5–5.0 percentage-point gains in its experiments.
-
-All remain source-reported maxima or aggregates, not Waggle results.
-
-## Novelty protocol
-
-Allowed statement:
-
-> The dated bounded review did not identify one system combining all of the
-> registered Waggle/Kea components.
-
-Disallowed statements:
-
-- “No one has done this.”
-- “The decoder does not exist.”
-- “First ever.”
-- “Unclaimed prior art.”
-- Any patentability or freedom-to-operate conclusion.
-
-A public novelty claim requires an updated search, a query/result appendix,
-review by a domain expert, and—if legal priority matters—qualified counsel.
-
-## Update procedure
-
-Before each paper release:
-
-1. Reopen every arXiv/official source and record the revision used.
-2. Re-run the five search lanes from the previous cutoff date.
-3. Add counterevidence and failed replications.
-4. Reconcile every numeric statement with `CLAIM-LEDGER.md`.
-5. Run `node verify.mjs`.
-6. Record the source hash and final artifact hash.
-
-## Limitations
-
-The v0.3 review did not search every scholarly index, non-English publication,
-patent database, private implementation, product codebase, or unpublished
-system. Several 2026 sources are recent preprints. Commercial pages are
-self-reported. The field is moving quickly, and absence from this review is
-not evidence of absence.
+1. reconcile every result sentence with `CLAIM-LEDGER.md` and
+   `data/c15d-summary.json`;
+2. run `npm run check`;
+3. regenerate `SHA256SUMS` for the public research files;
+4. scan the complete public tree and Git history for credentials, private
+   paths, private implementation identifiers, and excluded branding; and
+5. verify the repository, release, CI, and paper asset while signed out.

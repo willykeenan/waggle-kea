@@ -1,0 +1,1161 @@
+{
+  "intents": [
+    {
+      "f1Delta": 0.0540624034599938,
+      "intent": "card_arrival",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8433734939759037,
+        "precision": 0.813953488372093,
+        "recall": 0.875
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8974358974358975,
+        "precision": 0.9210526315789473,
+        "recall": 0.875
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "card_linking",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9629629629629629,
+        "precision": 0.9512195121951219,
+        "recall": 0.975
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9629629629629629,
+        "precision": 0.9512195121951219,
+        "recall": 0.975
+      }
+    },
+    {
+      "f1Delta": 0.01144233664558858,
+      "intent": "exchange_rate",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.926829268292683,
+        "precision": 0.9047619047619048,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9382716049382716,
+        "precision": 0.926829268292683,
+        "recall": 0.95
+      }
+    },
+    {
+      "f1Delta": 0.024691358024691357,
+      "intent": "card_payment_wrong_exchange_rate",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8888888888888888,
+        "precision": 0.8780487804878049,
+        "recall": 0.9
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9135802469135802,
+        "precision": 0.9024390243902439,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": 0.08560959360426379,
+      "intent": "extra_charge_on_statement",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8354430379746836,
+        "precision": 0.8461538461538461,
+        "recall": 0.825
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9210526315789473,
+        "precision": 0.9722222222222222,
+        "recall": 0.875
+      }
+    },
+    {
+      "f1Delta": 0.011392405063291089,
+      "intent": "pending_cash_withdrawal",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9,
+        "precision": 0.9,
+        "recall": 0.9
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9113924050632911,
+        "precision": 0.9230769230769231,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.011796042617960523,
+      "intent": "fiat_currency_support",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8493150684931506,
+        "precision": 0.9393939393939394,
+        "recall": 0.775
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8611111111111112,
+        "precision": 0.96875,
+        "recall": 0.775
+      }
+    },
+    {
+      "f1Delta": -0.011111111111111183,
+      "intent": "card_delivery_estimate",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9,
+        "precision": 0.9,
+        "recall": 0.9
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8888888888888888,
+        "precision": 0.8780487804878049,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.014358974358974375,
+      "intent": "automatic_top_up",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.96,
+        "precision": 1.0,
+        "recall": 0.9230769230769231
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9743589743589743,
+        "precision": 0.9743589743589743,
+        "recall": 0.9743589743589743
+      }
+    },
+    {
+      "f1Delta": 0.014931927975406323,
+      "intent": "card_not_working",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.7676767676767676,
+        "precision": 0.6440677966101694,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.782608695652174,
+        "precision": 0.6923076923076923,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.010613884107860017,
+      "intent": "exchange_via_app",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8809523809523809,
+        "precision": 0.8409090909090909,
+        "recall": 0.925
+      },
+      "wordPlusCharacter": {
+        "f1": 0.891566265060241,
+        "precision": 0.8604651162790697,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": -0.0023228803716608404,
+      "intent": "lost_or_stolen_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9047619047619048,
+        "precision": 0.8636363636363636,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9024390243902439,
+        "precision": 0.8809523809523809,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "age_limit",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9876543209876543,
+        "precision": 0.975609756097561,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9876543209876543,
+        "precision": 0.975609756097561,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.02337899543378985,
+      "intent": "pin_blocked",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.8533333333333334,
+        "precision": 0.8888888888888888,
+        "recall": 0.8205128205128205
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8767123287671232,
+        "precision": 0.9411764705882353,
+        "recall": 0.8205128205128205
+      }
+    },
+    {
+      "f1Delta": 0.043258832011535686,
+      "intent": "contactless_not_working",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9041095890410958,
+        "precision": 1.0,
+        "recall": 0.825
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9473684210526315,
+        "precision": 1.0,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.06425153793574845,
+      "intent": "top_up_by_bank_transfer_charge",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.8831168831168831,
+        "precision": 0.8947368421052632,
+        "recall": 0.8717948717948718
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9473684210526315,
+        "precision": 0.972972972972973,
+        "recall": 0.9230769230769231
+      }
+    },
+    {
+      "f1Delta": 0.033625730994152,
+      "intent": "pending_top_up",
+      "support": 38,
+      "wordOnly": {
+        "f1": 0.8611111111111112,
+        "precision": 0.9117647058823529,
+        "recall": 0.8157894736842105
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8947368421052632,
+        "precision": 0.8947368421052632,
+        "recall": 0.8947368421052632
+      }
+    },
+    {
+      "f1Delta": 0.024358974358974383,
+      "intent": "cancel_transfer",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.95,
+        "precision": 0.95,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9743589743589743,
+        "precision": 1.0,
+        "recall": 0.95
+      }
+    },
+    {
+      "f1Delta": 0.012877263581488885,
+      "intent": "top_up_limits",
+      "support": 34,
+      "wordOnly": {
+        "f1": 0.9014084507042254,
+        "precision": 0.8648648648648649,
+        "recall": 0.9411764705882353
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9142857142857143,
+        "precision": 0.8888888888888888,
+        "recall": 0.9411764705882353
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "wrong_amount_of_cash_received",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9113924050632911,
+        "precision": 0.9230769230769231,
+        "recall": 0.9
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9113924050632911,
+        "precision": 0.9230769230769231,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.023616734143049878,
+      "intent": "card_payment_fee_charged",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8974358974358975,
+        "precision": 0.9210526315789473,
+        "recall": 0.875
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9210526315789473,
+        "precision": 0.9722222222222222,
+        "recall": 0.875
+      }
+    },
+    {
+      "f1Delta": 0.07352941176470584,
+      "intent": "transfer_not_received_by_recipient",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.7764705882352941,
+        "precision": 0.7333333333333333,
+        "recall": 0.825
+      },
+      "wordPlusCharacter": {
+        "f1": 0.85,
+        "precision": 0.85,
+        "recall": 0.85
+      }
+    },
+    {
+      "f1Delta": 0.03208556149732622,
+      "intent": "supported_cards_and_currencies",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9090909090909091,
+        "precision": 0.8333333333333334,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9411764705882353,
+        "precision": 0.8888888888888888,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.03927648578811371,
+      "intent": "getting_virtual_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8444444444444444,
+        "precision": 0.76,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8837209302325582,
+        "precision": 0.8260869565217391,
+        "recall": 0.95
+      }
+    },
+    {
+      "f1Delta": 0.03654358583936046,
+      "intent": "card_acceptance",
+      "support": 38,
+      "wordOnly": {
+        "f1": 0.8648648648648649,
+        "precision": 0.8888888888888888,
+        "recall": 0.8421052631578947
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9014084507042254,
+        "precision": 0.9696969696969697,
+        "recall": 0.8421052631578947
+      }
+    },
+    {
+      "f1Delta": 0.01098901098901095,
+      "intent": "top_up_reverted",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8461538461538461,
+        "precision": 0.868421052631579,
+        "recall": 0.825
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8571428571428571,
+        "precision": 0.8918918918918919,
+        "recall": 0.825
+      }
+    },
+    {
+      "f1Delta": 0.012025316455696267,
+      "intent": "balance_not_updated_after_cheque_or_cash_deposit",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.95,
+        "precision": 0.95,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9620253164556962,
+        "precision": 0.9743589743589743,
+        "recall": 0.95
+      }
+    },
+    {
+      "f1Delta": 0.10058159425248026,
+      "intent": "card_payment_not_recognised",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8108108108108109,
+        "precision": 0.8823529411764706,
+        "recall": 0.75
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9113924050632911,
+        "precision": 0.9230769230769231,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "edit_personal_details",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.9873417721518988,
+        "precision": 0.975,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9873417721518988,
+        "precision": 0.975,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "why_verify_identity",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.85,
+        "precision": 0.85,
+        "recall": 0.85
+      },
+      "wordPlusCharacter": {
+        "f1": 0.85,
+        "precision": 0.85,
+        "recall": 0.85
+      }
+    },
+    {
+      "f1Delta": 0.029379590561025126,
+      "intent": "unable_to_verify_identity",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.810126582278481,
+        "precision": 0.8205128205128205,
+        "recall": 0.8
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8395061728395061,
+        "precision": 0.8292682926829268,
+        "recall": 0.85
+      }
+    },
+    {
+      "f1Delta": 0.05052264808362372,
+      "intent": "get_physical_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8780487804878049,
+        "precision": 0.8571428571428571,
+        "recall": 0.9
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9285714285714286,
+        "precision": 0.8863636363636364,
+        "recall": 0.975
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "visa_or_mastercard",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.961038961038961,
+        "precision": 1.0,
+        "recall": 0.925
+      },
+      "wordPlusCharacter": {
+        "f1": 0.961038961038961,
+        "precision": 1.0,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": 0.07179487179487176,
+      "intent": "topping_up_by_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8,
+        "precision": 0.8571428571428571,
+        "recall": 0.75
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8717948717948718,
+        "precision": 0.8947368421052632,
+        "recall": 0.85
+      }
+    },
+    {
+      "f1Delta": 0.011322011322011272,
+      "intent": "disposable_card_limits",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8717948717948718,
+        "precision": 0.8947368421052632,
+        "recall": 0.85
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8831168831168831,
+        "precision": 0.918918918918919,
+        "recall": 0.85
+      }
+    },
+    {
+      "f1Delta": 0.025316455696202556,
+      "intent": "compromised_card",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.8860759493670886,
+        "precision": 0.875,
+        "recall": 0.8974358974358975
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9113924050632911,
+        "precision": 0.9,
+        "recall": 0.9230769230769231
+      }
+    },
+    {
+      "f1Delta": 0.028449502133712556,
+      "intent": "atm_support",
+      "support": 38,
+      "wordOnly": {
+        "f1": 0.918918918918919,
+        "precision": 0.9444444444444444,
+        "recall": 0.8947368421052632
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9473684210526315,
+        "precision": 0.9473684210526315,
+        "recall": 0.9473684210526315
+      }
+    },
+    {
+      "f1Delta": 0.025000000000000022,
+      "intent": "direct_debit_payment_not_recognised",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.875,
+        "precision": 0.875,
+        "recall": 0.875
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9,
+        "precision": 0.9,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "passcode_forgotten",
+      "support": 40,
+      "wordOnly": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.024691358024691357,
+      "intent": "declined_cash_withdrawal",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8888888888888888,
+        "precision": 0.8780487804878049,
+        "recall": 0.9
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9135802469135802,
+        "precision": 0.9024390243902439,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": 0.02201398185333925,
+      "intent": "pending_card_payment",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.891566265060241,
+        "precision": 0.8604651162790697,
+        "recall": 0.925
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9135802469135802,
+        "precision": 0.9024390243902439,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": -0.0123417721518988,
+      "intent": "lost_or_stolen_phone",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9873417721518988,
+        "precision": 1.0,
+        "recall": 0.975
+      },
+      "wordPlusCharacter": {
+        "f1": 0.975,
+        "precision": 0.975,
+        "recall": 0.975
+      }
+    },
+    {
+      "f1Delta": -0.0585999366487171,
+      "intent": "request_refund",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.961038961038961,
+        "precision": 1.0,
+        "recall": 0.925
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9024390243902439,
+        "precision": 0.8809523809523809,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": -0.002844950213371278,
+      "intent": "declined_transfer",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8947368421052632,
+        "precision": 0.9444444444444444,
+        "recall": 0.85
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8918918918918919,
+        "precision": 0.9705882352941176,
+        "recall": 0.825
+      }
+    },
+    {
+      "f1Delta": -0.02696038139076118,
+      "intent": "Refund_not_showing_up",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9620253164556962,
+        "precision": 0.9743589743589743,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.935064935064935,
+        "precision": 0.972972972972973,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": -0.03485354097144977,
+      "intent": "declined_card_payment",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8735632183908046,
+        "precision": 0.8085106382978723,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8387096774193549,
+        "precision": 0.7358490566037735,
+        "recall": 0.975
+      }
+    },
+    {
+      "f1Delta": 0.07773221608129788,
+      "intent": "pending_transfer",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.7323943661971831,
+        "precision": 0.8387096774193549,
+        "recall": 0.65
+      },
+      "wordPlusCharacter": {
+        "f1": 0.810126582278481,
+        "precision": 0.8205128205128205,
+        "recall": 0.8
+      }
+    },
+    {
+      "f1Delta": 0.012044564890093312,
+      "intent": "terminate_account",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.975609756097561,
+        "precision": 0.9523809523809523,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9876543209876543,
+        "precision": 0.975609756097561,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.002133712660028375,
+      "intent": "card_swallowed",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.918918918918919,
+        "precision": 1.0,
+        "recall": 0.85
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9210526315789473,
+        "precision": 0.9722222222222222,
+        "recall": 0.875
+      }
+    },
+    {
+      "f1Delta": -0.0226789510985117,
+      "intent": "transaction_charged_twice",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.963855421686747,
+        "precision": 0.9302325581395349,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9411764705882353,
+        "precision": 0.8888888888888888,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "verify_source_of_funds",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.963855421686747,
+        "precision": 0.9302325581395349,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 0.963855421686747,
+        "precision": 0.9302325581395349,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.05967005967005967,
+      "intent": "transfer_timing",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8051948051948052,
+        "precision": 0.8378378378378378,
+        "recall": 0.775
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8648648648648649,
+        "precision": 0.9411764705882353,
+        "recall": 0.8
+      }
+    },
+    {
+      "f1Delta": 0.013550135501355087,
+      "intent": "reverted_card_payment?",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.8888888888888888,
+        "precision": 0.8571428571428571,
+        "recall": 0.9230769230769231
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9024390243902439,
+        "precision": 0.8604651162790697,
+        "recall": 0.9487179487179487
+      }
+    },
+    {
+      "f1Delta": 0.012645249487354793,
+      "intent": "change_pin",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.961038961038961,
+        "precision": 0.9736842105263158,
+        "recall": 0.9487179487179487
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9736842105263158,
+        "precision": 1.0,
+        "recall": 0.9487179487179487
+      }
+    },
+    {
+      "f1Delta": 0.0585999366487171,
+      "intent": "beneficiary_not_allowed",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9024390243902439,
+        "precision": 0.8809523809523809,
+        "recall": 0.925
+      },
+      "wordPlusCharacter": {
+        "f1": 0.961038961038961,
+        "precision": 1.0,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "transfer_fee_charged",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.8888888888888888,
+        "precision": 0.8571428571428571,
+        "recall": 0.9230769230769231
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8888888888888888,
+        "precision": 0.8571428571428571,
+        "recall": 0.9230769230769231
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "receiving_money",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9743589743589743,
+        "precision": 1.0,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9743589743589743,
+        "precision": 1.0,
+        "recall": 0.95
+      }
+    },
+    {
+      "f1Delta": 0.019163763066202155,
+      "intent": "failed_transfer",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.7857142857142857,
+        "precision": 0.7333333333333333,
+        "recall": 0.8461538461538461
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8048780487804879,
+        "precision": 0.7674418604651163,
+        "recall": 0.8461538461538461
+      }
+    },
+    {
+      "f1Delta": 0.010840108401083959,
+      "intent": "transfer_into_account",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8780487804878049,
+        "precision": 0.8571428571428571,
+        "recall": 0.9
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8888888888888888,
+        "precision": 0.8780487804878049,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.012658227848101222,
+      "intent": "verify_top_up",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.9873417721518988,
+        "precision": 0.975,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "getting_spare_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.925,
+        "precision": 0.925,
+        "recall": 0.925
+      },
+      "wordPlusCharacter": {
+        "f1": 0.925,
+        "precision": 0.925,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": 0.0419720186542305,
+      "intent": "top_up_by_cash_or_cheque",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.8947368421052632,
+        "precision": 0.918918918918919,
+        "recall": 0.8717948717948718
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9367088607594937,
+        "precision": 0.925,
+        "recall": 0.9487179487179487
+      }
+    },
+    {
+      "f1Delta": 0.025974025974025983,
+      "intent": "order_physical_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8571428571428571,
+        "precision": 0.8918918918918919,
+        "recall": 0.825
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8831168831168831,
+        "precision": 0.918918918918919,
+        "recall": 0.85
+      }
+    },
+    {
+      "f1Delta": 0.046966731898238745,
+      "intent": "virtual_card_not_working",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8571428571428571,
+        "precision": 1.0,
+        "recall": 0.75
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9041095890410958,
+        "precision": 1.0,
+        "recall": 0.825
+      }
+    },
+    {
+      "f1Delta": 0.04596935376415723,
+      "intent": "wrong_exchange_rate_for_cash_withdrawal",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.7894736842105263,
+        "precision": 0.8333333333333334,
+        "recall": 0.75
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8354430379746836,
+        "precision": 0.8461538461538461,
+        "recall": 0.825
+      }
+    },
+    {
+      "f1Delta": 0.017435897435897463,
+      "intent": "get_disposable_virtual_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.88,
+        "precision": 0.9428571428571428,
+        "recall": 0.825
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8974358974358975,
+        "precision": 0.9210526315789473,
+        "recall": 0.875
+      }
+    },
+    {
+      "f1Delta": 0.024761904761904763,
+      "intent": "top_up_failed",
+      "support": 36,
+      "wordOnly": {
+        "f1": 0.7466666666666667,
+        "precision": 0.717948717948718,
+        "recall": 0.7777777777777778
+      },
+      "wordPlusCharacter": {
+        "f1": 0.7714285714285715,
+        "precision": 0.7941176470588235,
+        "recall": 0.75
+      }
+    },
+    {
+      "f1Delta": 0.029900332225913595,
+      "intent": "balance_not_updated_after_bank_transfer",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.7142857142857143,
+        "precision": 0.6818181818181818,
+        "recall": 0.75
+      },
+      "wordPlusCharacter": {
+        "f1": 0.7441860465116279,
+        "precision": 0.6956521739130435,
+        "recall": 0.8
+      }
+    },
+    {
+      "f1Delta": -0.010644257703081195,
+      "intent": "cash_withdrawal_not_recognised",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9047619047619048,
+        "precision": 0.8636363636363636,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.8941176470588236,
+        "precision": 0.8444444444444444,
+        "recall": 0.95
+      }
+    },
+    {
+      "f1Delta": 0.016883116883116944,
+      "intent": "exchange_charge",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.8831168831168831,
+        "precision": 0.918918918918919,
+        "recall": 0.85
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9,
+        "precision": 0.9,
+        "recall": 0.9
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "top_up_by_card_charge",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.9620253164556962,
+        "precision": 0.95,
+        "recall": 0.9743589743589743
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9620253164556962,
+        "precision": 0.95,
+        "recall": 0.9743589743589743
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "activate_my_card",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9620253164556962,
+        "precision": 0.9743589743589743,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9620253164556962,
+        "precision": 0.9743589743589743,
+        "recall": 0.95
+      }
+    },
+    {
+      "f1Delta": -0.012009087958455011,
+      "intent": "cash_withdrawal_charge",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.9487179487179487,
+        "precision": 0.9736842105263158,
+        "recall": 0.925
+      },
+      "wordPlusCharacter": {
+        "f1": 0.9367088607594937,
+        "precision": 0.9487179487179487,
+        "recall": 0.925
+      }
+    },
+    {
+      "f1Delta": 0.050000000000000044,
+      "intent": "card_about_to_expire",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.95,
+        "precision": 0.95,
+        "recall": 0.95
+      },
+      "wordPlusCharacter": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.0,
+      "intent": "apple_pay_or_google_pay",
+      "support": 39,
+      "wordOnly": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "wordPlusCharacter": {
+        "f1": 1.0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    {
+      "f1Delta": 0.0967532467532467,
+      "intent": "verify_my_identity",
+      "support": 40,
+      "wordOnly": {
+        "f1": 0.7532467532467533,
+        "precision": 0.7837837837837838,
+        "recall": 0.725
+      },
+      "wordPlusCharacter": {
+        "f1": 0.85,
+        "precision": 0.85,
+        "recall": 0.85
+      }
+    },
+    {
+      "f1Delta": 0.02499999999999991,
+      "intent": "country_support",
+      "support": 39,
+      "wordOnly": {
+        "f1": 0.925,
+        "precision": 0.9024390243902439,
+        "recall": 0.9487179487179487
+      },
+      "wordPlusCharacter": {
+        "f1": 0.95,
+        "precision": 0.926829268292683,
+        "recall": 0.9743589743589743
+      }
+    }
+  ],
+  "primaryTestCases": 3050,
+  "schemaVersion": "waggle.banking77.per-intent.v1"
+}

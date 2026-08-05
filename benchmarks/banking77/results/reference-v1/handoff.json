@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "waggle.banking77.handoff.v1",
+  "status": "passed",
+  "cases": 3050,
+  "modelArtifactId": "model_banking77_word_char_sgd_v1",
+  "sourceTestSha256": "d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d",
+  "informationParity": {
+    "directRecordFields": [
+      "caseId",
+      "predictedIntent",
+      "confidencePpm",
+      "top3"
+    ],
+    "exactDirectJsonAgreement": 3050,
+    "exactDirectWaggleAgreement": 3050,
+    "disagreementCount": 0
+  },
+  "clean": {
+    "falseRejections": 0,
+    "authorityGrants": 0,
+    "authorityEffectsExecuted": 0,
+    "ledgerEvents": 6100
+  },
+  "noStateControl": {
+    "cases": 3050,
+    "abstentions": 3050
+  },
+  "payloadBytes": {
+    "unit": "canonical UTF-8 bytes; not tokens, cost, memory, or total resources",
+    "canonicalJson": {
+      "median": 444,
+      "p95": 512,
+      "total": 1368985
+    },
+    "wagglePacket": {
+      "median": 628,
+      "p95": 681,
+      "total": 1925712
+    }
+  },
+  "faults": {
+    "selectedCases": 64,
+    "selection": "64 smallest SHA-256(caseId) values",
+    "exactDuplicateIdempotent": 64,
+    "staleHashRejected": 64,
+    "byteCountRejected": 64,
+    "immutableEnvelopeCollisionRejected": 64,
+    "manifestMismatchRejected": 64,
+    "unknownCodecRejected": 64,
+    "benchmarkSchemaRejected": 64,
+    "detectableFaultFalseAccepts": 0
+  },
+  "ledgerTamper": {
+    "cases": 1,
+    "rejected": true
+  },
+  "rehashedForgeryControl": {
+    "cases": 1,
+    "threatModel": "permitted writer changes payload and recomputes all content identity without a separate trust root",
+    "expectedDetected": false,
+    "detected": false,
+    "claimBoundary": "content hashes detect corruption, not permitted-writer intent"
+  },
+  "effects": {
+    "providerApiCalls": 0,
+    "modelApiCalls": 0,
+    "networkCalls": 0,
+    "authorityEffectsExecuted": 0
+  },
+  "nonClaims": [
+    "Exact handoff agreement does not establish better classification.",
+    "The finite fault suite is not adversarial security validation.",
+    "Kea qualification never grants execution authority.",
+    "Payload bytes are not tokens, cost, memory, energy, or total resources."
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "dependencies": {
+    "joblib": "1.5.3",
+    "numpy": "2.0.2",
+    "scikitLearn": "1.6.1",
+    "scipy": "1.13.1"
+  },
+  "machine": "arm64",
+  "platform": "macOS-15.3-arm64-arm-64bit",
+  "processor": "arm",
+  "providerApiCalls": 0,
+  "python": "3.9.6 (default, Oct  4 2024, 08:01:31) \n[Clang 16.0.0 (clang-1600.0.26.4)]",
+  "pythonExecutable": "python",
+  "schemaVersion": "waggle.banking77.environment.v1",
+  "scoredPhaseNetworkCalls": 0
+}

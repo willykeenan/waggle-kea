@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this reference implementation, please cite it using this metadata."
 title: "Waggle + Kea: Inspectable Machine Coordination"
 type: software
-version: 0.1.0
+version: 0.1.1
 date-released: 2026-08-05
 authors:
   - family-names: Keenan

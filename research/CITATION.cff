@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this research package, please cite it using this metadata."
 title: "Waggle and Kea: A Bounded Evaluation of Native-State Reuse for Machine-Agent Coordination"
 type: article
-version: 0.1.0
+version: 0.1.1
 date-released: 2026-08-05
 authors:
   - family-names: Keenan

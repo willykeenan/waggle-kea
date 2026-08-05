@@ -1,6 +1,6 @@
 {
   "name": "waggle-kea",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Fixture-only reference implementation of the Waggle v0 coordination protocol and Kea audit layer.",
   "type": "module",
   "license": "MIT",
@@ -39,7 +39,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test tests/**/*.test.ts",
+    "test": "tsx --test tests/*.test.ts",
     "verify:research": "node research/verify.mjs",
     "check": "npm run typecheck && npm test && npm run build && node dist/kea/cli.js evaluate && npm run verify:research",
     "demo": "tsx examples/demo.ts",

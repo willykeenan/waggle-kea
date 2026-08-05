@@ -1,6 +1,7 @@
 import type { KeaDecoder } from "../kea/service.js";
 import type { KeaCodecManifestInput } from "../kea/registry.js";
 import { canonicalBytes } from "../kea/canonical.js";
+import type { KeaRawMessage } from "../kea/types.js";
 import type { WaggleV0Packet } from "./types.js";
 
 export const WAGGLE_V0_CODEC_ID = "waggle.v0.canonical-json";
@@ -43,9 +44,50 @@ const FORBIDDEN_KEYS = new Set([
   "humanGloss",
   "description",
 ]);
+const PACKET_KEYS = new Set([
+  "protocol",
+  "messageClass",
+  "intent",
+  "operation",
+  "references",
+  "delta",
+  "composition",
+]);
+const REQUIRED_PACKET_KEYS = [
+  "protocol",
+  "messageClass",
+  "intent",
+  "operation",
+  "references",
+  "delta",
+] as const;
+const REFERENCE_KEYS = new Set(["context", "artifacts", "evidence"]);
+const COMPOSITION_KEYS = new Set(["mode", "operandIds"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateExactKeys(
+  value: Record<string, unknown>,
+  path: string,
+  allowed: ReadonlySet<string>,
+  required: readonly string[]
+): string[] {
+  const errors: string[] = [];
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") {
+      errors.push(`${path} contains a non-string field`);
+    } else if (!allowed.has(key)) {
+      errors.push(`${path}.${key} is an unexpected field`);
+    }
+  }
+  for (const key of required) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      errors.push(`${path}.${key} is required`);
+    }
+  }
+  return errors;
 }
 
 function validateValue(
@@ -98,6 +140,7 @@ function validateValue(
 export function validateWaggleV0Packet(packet: unknown): string[] {
   const errors: string[] = [];
   if (!isRecord(packet)) return ["packet must be an object"];
+  errors.push(...validateExactKeys(packet, "packet", PACKET_KEYS, REQUIRED_PACKET_KEYS));
   if (packet.protocol !== "waggle.v0") errors.push("protocol must be waggle.v0");
   if (typeof packet.messageClass !== "string" || !MESSAGE_CLASSES.has(packet.messageClass)) {
     errors.push("messageClass is invalid");
@@ -111,6 +154,14 @@ export function validateWaggleV0Packet(packet: unknown): string[] {
   if (!isRecord(packet.references)) {
     errors.push("references must be an object");
   } else {
+    errors.push(
+      ...validateExactKeys(
+        packet.references,
+        "packet.references",
+        REFERENCE_KEYS,
+        [...REFERENCE_KEYS]
+      )
+    );
     for (const kind of ["context", "artifacts", "evidence"] as const) {
       const refs = packet.references[kind];
       if (!Array.isArray(refs)) {
@@ -131,6 +182,14 @@ export function validateWaggleV0Packet(packet: unknown): string[] {
     if (!isRecord(packet.composition)) {
       errors.push("composition must be an object");
     } else {
+      errors.push(
+        ...validateExactKeys(
+          packet.composition,
+          "packet.composition",
+          COMPOSITION_KEYS,
+          [...COMPOSITION_KEYS]
+        )
+      );
       if (packet.composition.mode !== "sequence" && packet.composition.mode !== "bundle") {
         errors.push("composition mode is invalid");
       }
@@ -148,9 +207,7 @@ export function validateWaggleV0Packet(packet: unknown): string[] {
       }
     }
   }
-  if (!Object.prototype.hasOwnProperty.call(packet, "delta")) {
-    errors.push("delta is required");
-  } else {
+  if (Object.prototype.hasOwnProperty.call(packet, "delta")) {
     errors.push(...validateValue(packet.delta, "delta", new Set<object>()));
   }
   try {
@@ -159,6 +216,18 @@ export function validateWaggleV0Packet(packet: unknown): string[] {
     }
   } catch {
     errors.push("packet cannot be canonically encoded");
+  }
+  return errors;
+}
+
+export function validateWaggleV0Envelope(message: KeaRawMessage): string[] {
+  const errors = validateWaggleV0Packet(message.payload);
+  if (
+    isRecord(message.payload) &&
+    typeof message.payload.messageClass === "string" &&
+    message.payload.messageClass !== message.messageClass
+  ) {
+    errors.push("packet.messageClass must match message.messageClass");
   }
   return errors;
 }
@@ -199,7 +268,7 @@ export function keaWaggleV0Decoder(): KeaDecoder {
     codecVersion: WAGGLE_V0_CODEC_VERSION,
     decode(message) {
       const payload = message.payload;
-      const errors = validateWaggleV0Packet(payload);
+      const errors = validateWaggleV0Envelope(message);
       const packet = errors.length ? null : (payload as WaggleV0Packet);
       return {
         humanGloss: errors.length

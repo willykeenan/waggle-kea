@@ -116,7 +116,7 @@ export interface KeaInterpretation {
     exactRoundTrip?: boolean;
     behavioralParity?: number;
     secondaryDecoderAgreement?: number;
-    policyParity: boolean;
+    policyParity: "not-evaluated" | "passed" | "failed";
     outOfDistribution: boolean;
     payloadHashVerified: boolean;
   };

@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./validation.js";
 export * from "./canonical.js";
 export * from "./paths.js";
 export * from "./registry.js";

@@ -2,6 +2,7 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -22,8 +23,18 @@ import type {
 
 export type KeaLedgerData = KeaRawMessage | KeaInterpretation | KeaCorrection;
 
+export interface KeaLedgerAppend {
+  kind: KeaLedgerEventKind;
+  messageId: string;
+  data: KeaLedgerData;
+  at?: string;
+}
+
+export type KeaLedgerGuard = (events: readonly KeaLedgerEvent[]) => void;
+
 export interface KeaLedger {
   append(kind: KeaLedgerEventKind, messageId: string, data: KeaLedgerData, at?: string): KeaLedgerEvent;
+  appendBatch(entries: readonly KeaLedgerAppend[], guard?: KeaLedgerGuard): KeaLedgerEvent[];
   read(): KeaLedgerEvent[];
 }
 
@@ -51,9 +62,33 @@ export function verifyKeaLedger(events: KeaLedgerEvent[]): {
     if (calculateEventHash(withoutHash) !== eventHash) {
       throw new Error(`Kea ledger hash mismatch at ${event.sequence}`);
     }
+    const expectedEventId = contentId("keaevt", {
+      sequence: event.sequence,
+      kind: event.kind,
+      messageId: event.messageId,
+      at: event.at,
+      data: event.data,
+    });
+    if (event.eventId !== expectedEventId) {
+      throw new Error(`Kea ledger event ID mismatch at ${event.sequence}`);
+    }
     previousHash = eventHash;
   }
   return { ok: true, events: events.length, lastHash: previousHash };
+}
+
+function buildBatch(
+  events: KeaLedgerEvent[],
+  entries: readonly KeaLedgerAppend[]
+): { events: KeaLedgerEvent[]; appended: KeaLedgerEvent[] } {
+  const next = events.map((event) => structuredClone(event));
+  const appended: KeaLedgerEvent[] = [];
+  for (const entry of entries) {
+    const event = buildEvent(next, entry.kind, entry.messageId, entry.data, entry.at);
+    next.push(event);
+    appended.push(event);
+  }
+  return { events: next, appended };
 }
 
 function buildEvent(
@@ -93,9 +128,18 @@ export class MemoryKeaLedger implements KeaLedger {
     data: KeaLedgerData,
     at?: string
   ): KeaLedgerEvent {
-    const event = buildEvent(this.events, kind, messageId, data, at);
-    this.events.push(event);
-    return structuredClone(event);
+    const [event] = this.appendBatch([{ kind, messageId, data, at }]);
+    if (!event) throw new Error("Kea ledger append produced no event");
+    return event;
+  }
+
+  appendBatch(entries: readonly KeaLedgerAppend[], guard?: KeaLedgerGuard): KeaLedgerEvent[] {
+    if (!entries.length) return [];
+    verifyKeaLedger(this.events);
+    guard?.(this.events.map((event) => structuredClone(event)));
+    const batch = buildBatch(this.events, entries);
+    this.events = batch.events;
+    return batch.appended.map((event) => structuredClone(event));
   }
 
   read(): KeaLedgerEvent[] {
@@ -132,6 +176,13 @@ export class FileKeaLedger implements KeaLedger {
     data: KeaLedgerData,
     at?: string
   ): KeaLedgerEvent {
+    const [event] = this.appendBatch([{ kind, messageId, data, at }]);
+    if (!event) throw new Error("Kea ledger append produced no event");
+    return event;
+  }
+
+  appendBatch(entries: readonly KeaLedgerAppend[], guard?: KeaLedgerGuard): KeaLedgerEvent[] {
+    if (!entries.length) return [];
     const directory = dirname(this.path);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     const lockPath = `${this.path}.lock`;
@@ -148,9 +199,16 @@ export class FileKeaLedger implements KeaLedger {
     const temp = `${this.path}.tmp-${process.pid}`;
     try {
       const events = this.read();
-      const event = buildEvent(events, kind, messageId, data, at);
-      const next = [...events, event].map((item) => canonicalJson(item)).join("\n");
+      guard?.(events.map((event) => structuredClone(event)));
+      const batch = buildBatch(events, entries);
+      const next = batch.events.map((item) => canonicalJson(item)).join("\n");
       writeFileSync(temp, `${next}\n`, { encoding: "utf8", mode: 0o600 });
+      const tempFd = openSync(temp, "r");
+      try {
+        fsyncSync(tempFd);
+      } finally {
+        closeSync(tempFd);
+      }
       renameSync(temp, this.path);
       try {
         chmodSync(directory, 0o700);
@@ -158,7 +216,7 @@ export class FileKeaLedger implements KeaLedger {
       } catch {
         /* best effort on filesystems without POSIX modes */
       }
-      return structuredClone(event);
+      return batch.appended.map((event) => structuredClone(event));
     } finally {
       try {
         if (existsSync(temp)) unlinkSync(temp);

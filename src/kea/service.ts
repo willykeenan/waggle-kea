@@ -1,11 +1,13 @@
 import { canonicalBytes, contentId, hashCanonical } from "./canonical.js";
 import { messageEvents, verifyKeaLedger, type KeaLedger } from "./ledger.js";
 import type { KeaRegistryLike } from "./registry.js";
+import { assertValidKeaRawMessage } from "./validation.js";
 import type {
   KeaAlternativeReading,
   KeaCorrection,
   KeaDecomposition,
   KeaInterpretation,
+  KeaLedgerEvent,
   KeaRawMessage,
   KeaReplay,
   KeaSemanticClaim,
@@ -19,6 +21,7 @@ export interface KeaDecodedMessage {
   proposedMissionDelta?: unknown;
   reconstructedPayload?: unknown;
   taskRequiredKeys?: string[];
+  /** Decoder-supplied diagnostic only; never qualification evidence. */
   behavioralParity?: number;
   outOfDistribution?: boolean;
 }
@@ -69,6 +72,81 @@ function cloneMessage(message: KeaRawMessage): KeaRawMessage {
   return structuredClone(message);
 }
 
+function recordedMessages(events: readonly KeaLedgerEvent[]): KeaRawMessage[] {
+  return events
+    .filter((event) => event.kind === "message")
+    .map((event) => event.data as KeaRawMessage);
+}
+
+function idempotencyEnvelope(message: KeaRawMessage): Omit<KeaRawMessage, "messageId"> {
+  const { messageId: _messageId, ...envelope } = message;
+  return envelope;
+}
+
+/**
+ * Return the canonical recorded message for an exact retry. Reusing either a
+ * message ID or an idempotency key for different content fails closed.
+ */
+function findExistingMessageId(
+  events: readonly KeaLedgerEvent[],
+  message: KeaRawMessage
+): string | null {
+  const messages = recordedMessages(events);
+  const sameId = messages.find((candidate) => candidate.messageId === message.messageId);
+  if (sameId) {
+    if (hashCanonical(sameId) !== hashCanonical(message)) {
+      throw new Error(`Kea message ${message.messageId} is immutable`);
+    }
+    return sameId.messageId;
+  }
+
+  const sameKey = messages.find(
+    (candidate) =>
+      candidate.idempotencyKey === message.idempotencyKey &&
+      candidate.codec.codecId === message.codec.codecId &&
+      candidate.codec.codecVersion === message.codec.codecVersion
+  );
+  if (!sameKey) return null;
+  if (
+    hashCanonical(idempotencyEnvelope(sameKey)) !==
+    hashCanonical(idempotencyEnvelope(message))
+  ) {
+    throw new Error(
+      `Kea idempotency key ${message.idempotencyKey} conflicts with message ${sameKey.messageId}`
+    );
+  }
+  return sameKey.messageId;
+}
+
+function assertCausalParents(events: readonly KeaLedgerEvent[], message: KeaRawMessage): void {
+  const uniqueParents = new Set(message.causalParentIds);
+  if (uniqueParents.size !== message.causalParentIds.length) {
+    throw new Error(`Kea message ${message.messageId} contains duplicate causal parents`);
+  }
+  const messages = recordedMessages(events);
+  const byId = new Map(messages.map((candidate) => [candidate.messageId, candidate]));
+  for (const parentId of message.causalParentIds) {
+    if (parentId === message.messageId) {
+      throw new Error(`Kea message ${message.messageId} cannot be its own causal parent`);
+    }
+    const parent = byId.get(parentId);
+    if (!parent) {
+      throw new Error(`Kea causal parent ${parentId} does not preexist`);
+    }
+    if (parent.missionId !== message.missionId) {
+      throw new Error(
+        `Kea causal parent ${parentId} belongs to a different mission`
+      );
+    }
+  }
+}
+
+class ConcurrentDuplicateIngest extends Error {
+  constructor(readonly recordedMessageId: string) {
+    super(`Kea message ${recordedMessageId} was committed concurrently`);
+  }
+}
+
 export class KeaService {
   readonly fixtureOnly: boolean;
   readonly maxUndecodableBytes: number;
@@ -100,12 +178,10 @@ export class KeaService {
   }
 
   ingest(input: KeaRawMessage): KeaIngestResult {
+    assertValidKeaRawMessage(input);
     const message = cloneMessage(input);
     if (this.fixtureOnly && message.fixture !== true) {
       throw new Error("This Kea reference implementation accepts fixtures only");
-    }
-    if (!message.messageId || !message.missionId || !message.workNodeId) {
-      throw new Error("Kea messageId, missionId, and workNodeId are required");
     }
     const actualHash = hashCanonical(message.payload);
     const actualBytes = canonicalBytes(message.payload);
@@ -116,15 +192,11 @@ export class KeaService {
       throw new Error(`Kea payload byte count mismatch for ${message.messageId}`);
     }
 
-    const existing = this.replayOrNull(message.messageId);
-    if (existing) {
-      if (hashCanonical(existing.message) !== hashCanonical(message)) {
-        throw new Error(`Kea message ${message.messageId} is immutable`);
-      }
-      const interpretation = existing.interpretations.at(-1);
-      if (!interpretation) throw new Error(`Kea replay ${message.messageId} has no interpretation`);
-      return { message: existing.message, interpretation, duplicate: true };
-    }
+    const snapshot = this.ledger.read();
+    verifyKeaLedger(snapshot);
+    const existingMessageId = findExistingMessageId(snapshot, message);
+    if (existingMessageId) return this.duplicateResult(existingMessageId);
+    assertCausalParents(snapshot, message);
 
     const manifest = this.registry.get(message.codec.codecId, message.codec.codecVersion);
     const decoder = this.decoders.get(decoderKey(message.codec.codecId, message.codec.codecVersion));
@@ -230,7 +302,7 @@ export class KeaService {
       verification: {
         exactRoundTrip,
         behavioralParity: decoded?.behavioralParity,
-        policyParity: true,
+        policyParity: "not-evaluated" as const,
         outOfDistribution: Boolean(decoded?.outOfDistribution),
         payloadHashVerified: true,
       },
@@ -253,8 +325,34 @@ export class KeaService {
       ...interpretationCore,
     };
 
-    this.ledger.append("message", message.messageId, message, message.createdAt);
-    this.ledger.append("interpretation", message.messageId, interpretation, createdAt);
+    try {
+      this.ledger.appendBatch(
+        [
+          {
+            kind: "message",
+            messageId: message.messageId,
+            data: message,
+            at: message.createdAt,
+          },
+          {
+            kind: "interpretation",
+            messageId: message.messageId,
+            data: interpretation,
+            at: createdAt,
+          },
+        ],
+        (currentEvents) => {
+          const committedMessageId = findExistingMessageId(currentEvents, message);
+          if (committedMessageId) throw new ConcurrentDuplicateIngest(committedMessageId);
+          assertCausalParents(currentEvents, message);
+        }
+      );
+    } catch (error) {
+      if (error instanceof ConcurrentDuplicateIngest) {
+        return this.duplicateResult(error.recordedMessageId);
+      }
+      throw error;
+    }
     return { message, interpretation, duplicate: false };
   }
 
@@ -342,5 +440,13 @@ export class KeaService {
       events: selected,
       chainVerified: true,
     };
+  }
+
+  private duplicateResult(messageId: string): KeaIngestResult {
+    const existing = this.replayOrNull(messageId);
+    if (!existing) throw new Error(`Kea duplicate ${messageId} disappeared from the ledger`);
+    const interpretation = existing.interpretations.at(-1);
+    if (!interpretation) throw new Error(`Kea replay ${messageId} has no interpretation`);
+    return { message: existing.message, interpretation, duplicate: true };
   }
 }

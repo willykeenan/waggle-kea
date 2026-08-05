@@ -1,0 +1,153 @@
+{
+  "schema": "waggle.public.c15d.summary.v1",
+  "title": "C15d-G1 Waggle/Kea amortized model-native context service",
+  "author": "William Keenan",
+  "researchContext": "independent",
+  "releaseDate": "2026-07-27",
+  "evidenceClass": "bounded-local-model-hardware-experiment",
+  "hardware": {
+    "device": "Apple M4 Max",
+    "backend": "Metal",
+    "unifiedMemory": true,
+    "sharedBuffers": true,
+    "cpuFallback": false
+  },
+  "model": {
+    "family": "Qwen3-14B",
+    "quantization": "Q6_K",
+    "localOpenWeight": true,
+    "trainingRuns": 0,
+    "providerApiCalls": 0
+  },
+  "authority": {
+    "modelProcessLoadCeiling": 16,
+    "acceptedModelProcessLoads": 15,
+    "forwardDecodeStepCeiling": 2048,
+    "acceptedForwardDecodeSteps": 690,
+    "externalCalls": 0,
+    "authorityEffectsExecuted": 0,
+    "authorityGranted": false
+  },
+  "workload": {
+    "tasks": 6,
+    "prefixTokens": 1701,
+    "inputTokensPerTask": 1781,
+    "nativeStateBytes": 279321005,
+    "nativeQueryBytes": 2307,
+    "repeatedFullTextPromptBytes": 53415
+  },
+  "quality": {
+    "residentNativeExact": 6,
+    "residentCachedTextExact": 6,
+    "residentFullTextExact": 6,
+    "freshNativeExact": 6,
+    "freshFullTextExact": 6,
+    "informedTasksPerArm": 6,
+    "noStateContinued": 0,
+    "noStateAbstained": 6,
+    "exactByteParity": true,
+    "exactSemanticParity": true
+  },
+  "completionCurveMs": [
+    {
+      "branches": 1,
+      "residentNative": 13779.464,
+      "residentCachedText": 6496.367,
+      "residentFullText": 6339.878,
+      "freshNativeCumulative": 2724.858,
+      "freshFullTextCumulative": 6358.122
+    },
+    {
+      "branches": 2,
+      "residentNative": 14986.787,
+      "residentCachedText": 7719.157,
+      "residentFullText": 12221.532,
+      "freshNativeCumulative": 5292.213,
+      "freshFullTextCumulative": 12571.268
+    },
+    {
+      "branches": 3,
+      "residentNative": 16184.914,
+      "residentCachedText": 8923.273,
+      "residentFullText": 18110.261,
+      "freshNativeCumulative": 7924.609,
+      "freshFullTextCumulative": 18844.386
+    },
+    {
+      "branches": 4,
+      "residentNative": 17247.436,
+      "residentCachedText": 10003.464,
+      "residentFullText": 23861.429,
+      "freshNativeCumulative": 10373.340,
+      "freshFullTextCumulative": 24863.371
+    },
+    {
+      "branches": 5,
+      "residentNative": 18442.572,
+      "residentCachedText": 11202.696,
+      "residentFullText": 29750.828,
+      "freshNativeCumulative": 12920.081,
+      "freshFullTextCumulative": 31040.636
+    },
+    {
+      "branches": 6,
+      "residentNative": 19848.887,
+      "residentCachedText": 12606.107,
+      "residentFullText": 35837.325,
+      "freshNativeCumulative": 15650.045,
+      "freshFullTextCumulative": 37402.632
+    }
+  ],
+  "endToEndWallMs": {
+    "residentNative": 20285.204,
+    "residentCachedText": 12850.184,
+    "residentFullText": 36140.624,
+    "freshNative": 17881.462,
+    "freshFullText": 39570.007
+  },
+  "componentMetrics": {
+    "nativeStateReadMs": 1019.981,
+    "nativeStateRestoreMs": 62.562,
+    "cachedTextPrefixPrefillMs": 4174.607,
+    "maximumPeakRssBytes": 2023538688,
+    "keaAndConsumerOverheadMs": 5586.97,
+    "totalEvaluationWallMs": 132314.449,
+    "directEnergyMetric": null
+  },
+  "breakEvenBranch": {
+    "versusResidentFullText": 3,
+    "versusResidentCachedText": null,
+    "versusFreshNative": null
+  },
+  "verification": {
+    "freezePins": 23,
+    "ledgerSteps": 9,
+    "adversarialAttacksRejected": 13,
+    "restartReplayAdditionalModelLoads": 0,
+    "restartReplayAdditionalForwardDecodeSteps": 0,
+    "focusedTestsPassed": true,
+    "formalReplayPassed": true,
+    "priorReplayPassed": true,
+    "typecheckPassed": true,
+    "buildPassed": true
+  },
+  "provenance": {
+    "sanitizedSourceEvidenceSha256": "2daa72b763509459321ed81bafb4a0cd5f5b835a409e65de5606f1f522b60c10",
+    "evaluationSha256": "1880d3b47c545538090cdd4dc0d4fbdde784240e569660197f7dc5932d68cb19",
+    "reportSha256": "6ff978727606f189e09c14e3b833107e7c6f2e0c75865692e5e617e16ffd7c18"
+  },
+  "claims": {
+    "hardwareNativeReuseMechanism": true,
+    "separateKeaQualification": true,
+    "boundedAdvantageOverResidentFullText": true,
+    "betterOverallHardwareUtilization": false,
+    "uniqueCapability": false,
+    "encodingAdvantage": false,
+    "overallEfficiency": false,
+    "tokenSavings": false,
+    "creditSavings": false,
+    "learnedLanguage": false,
+    "quantumBehavior": false,
+    "production": false
+  }
+}

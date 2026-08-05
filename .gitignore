@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.waggle-kea/
+*.log
+.DS_Store

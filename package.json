@@ -1,0 +1,56 @@
+{
+  "name": "waggle-kea",
+  "version": "0.1.0",
+  "description": "Fixture-only reference implementation of the Waggle v0 coordination protocol and Kea audit layer.",
+  "type": "module",
+  "license": "MIT",
+  "author": "William Keenan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/willykeenan/waggle-kea.git"
+  },
+  "homepage": "https://github.com/willykeenan/waggle-kea#readme",
+  "bugs": {
+    "url": "https://github.com/willykeenan/waggle-kea/issues"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./kea": {
+      "types": "./dist/kea/index.d.ts",
+      "import": "./dist/kea/index.js"
+    },
+    "./waggle": {
+      "types": "./dist/waggle/index.d.ts",
+      "import": "./dist/waggle/index.js"
+    }
+  },
+  "bin": {
+    "kea": "./bin/kea"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "verify:research": "node research/verify.mjs",
+    "check": "npm run typecheck && npm test && npm run build && node dist/kea/cli.js evaluate && npm run verify:research",
+    "demo": "tsx examples/demo.ts",
+    "kea": "tsx src/kea/cli.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

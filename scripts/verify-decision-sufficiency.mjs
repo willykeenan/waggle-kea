@@ -1178,10 +1178,10 @@ function verifyResultsDirectory(resultsDir, config) {
     "run.json must be an object"
   );
   requireCondition(/^decisionrun_[a-f0-9]{20}$/.test(run.runId), "runId invalid");
-  const { runId: observedRunId, ...runBody } = run;
+  const observedRunId = run.runId;
   requireCondition(
-    observedRunId === contentId("decisionrun", runBody),
-    "runId does not match run content"
+    observedRunId === contentId("decisionrun", run.runIdentity),
+    "runId does not match cross-runtime run identity"
   );
   requireCondition(run.resources?.trainingRuns === 1, "run training count drifted");
   requireCondition(run.resources?.scoredCases === vectors.length, "run scored-case count drifted");
@@ -1191,6 +1191,21 @@ function verifyResultsDirectory(resultsDir, config) {
   requireCondition(
     run.vectorArtifact?.sha256 === sha256Hex(readFileSync(resolve(dir, "vectors.jsonl"))),
     "run vector digest drifted"
+  );
+  requireCondition(
+    canonicalJson(run.runIdentity) ===
+      canonicalJson({
+        schemaVersion: "waggle.decision-sufficiency.run-identity.v1",
+        sourceContractSha256: sha256Hex(
+          readFileSync(resolve(repoRoot, "benchmarks/banking77/SOURCE.json"))
+        ),
+        classifierContractSha256: sha256Hex(
+          readFileSync(resolve(repoRoot, "benchmarks/banking77/config.v1.json"))
+        ),
+        decisionConfigSha256: sha256Hex(readFileSync(CONFIG_PATH)),
+        vectorsSha256: run.vectorArtifact.sha256,
+      }),
+    "runIdentity lineage drifted"
   );
 
   // Policies
@@ -2514,10 +2529,22 @@ function materializeValidResults(dir, tamper = {}) {
   }
 
   const vectorsPayload = `${vectors.map((row) => canonicalJson(row)).join("\n")}\n`;
+  const runIdentity = {
+    schemaVersion: "waggle.decision-sufficiency.run-identity.v1",
+    sourceContractSha256: sha256Hex(
+      readFileSync(resolve(repoRoot, "benchmarks/banking77/SOURCE.json"))
+    ),
+    classifierContractSha256: sha256Hex(
+      readFileSync(resolve(repoRoot, "benchmarks/banking77/config.v1.json"))
+    ),
+    decisionConfigSha256: sha256Hex(readFileSync(CONFIG_PATH)),
+    vectorsSha256: sha256Hex(vectorsPayload),
+  };
   const runBody = {
     schemaVersion: "waggle.decision-sufficiency.run.v1",
     status: "preregistered-prospective-secondary-analysis",
     author: "William Keenan",
+    runIdentity,
     resources: { trainingRuns: 1, scoredCases: vectors.length, vectorComponents: 77 },
     vectorArtifact: {
       rows: vectors.length,
@@ -2527,7 +2554,7 @@ function materializeValidResults(dir, tamper = {}) {
     },
     effects: { providerApiCalls: 0, modelApiCalls: 0, authorityEffectsExecuted: 0 },
   };
-  const run = { ...runBody, runId: contentId("decisionrun", runBody) };
+  const run = { ...runBody, runId: contentId("decisionrun", runIdentity) };
   writeFileSync(join(dir, "environment.json"), `${canonicalJson(environment)}\n`, "utf8");
   writeFileSync(join(dir, "run.json"), `${canonicalJson(run)}\n`, "utf8");
   writeFileSync(join(dir, "policies.json"), `${canonicalJson(policiesArtifact)}\n`, "utf8");

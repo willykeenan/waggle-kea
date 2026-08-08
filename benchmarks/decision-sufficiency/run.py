@@ -393,11 +393,19 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
     vectors_payload = ("\n".join(lines) + "\n").encode("utf-8")
     vectors_path.write_bytes(vectors_payload)
 
+    run_identity = {
+        "schemaVersion": "waggle.decision-sufficiency.run-identity.v1",
+        "sourceContractSha256": sha256_bytes(SOURCE_PATH.read_bytes()),
+        "classifierContractSha256": sha256_bytes(CLASSIFIER_CONFIG_PATH.read_bytes()),
+        "decisionConfigSha256": sha256_bytes(CONFIG_PATH.read_bytes()),
+        "vectorsSha256": sha256_bytes(vectors_payload),
+    }
     run_body = {
         "schemaVersion": RUN_SCHEMA,
         "status": decision_config["status"],
         "author": "William Keenan",
         "evidenceClass": "preregistered-prospective-secondary-analysis",
+        "runIdentity": run_identity,
         # Top-level inventory is required by the evaluator loader (run.labelIds / run.probabilityScale).
         # Order is classifier class order and must match every vector's probabilities[] indices.
         "labelIds": label_ids,
@@ -453,7 +461,10 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
             "No autonomous execution authority is granted by any vector or run artifact.",
         ],
     }
-    run = {**run_body, "runId": content_id("decisionrun", run_body)}
+    # The cross-runtime ID hashes an integer/string-only manifest. The richer
+    # run body contains floating-point policy metadata whose JSON number lexemes
+    # differ between Python and JavaScript (for example 1e-05 vs 0.00001).
+    run = {**run_body, "runId": content_id("decisionrun", run_identity)}
     write_json(output / "run.json", run)
 
     import joblib

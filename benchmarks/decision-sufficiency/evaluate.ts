@@ -1231,13 +1231,25 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
   const labelIds = labels.map(wireLabel);
   const runId = run.runId;
   requireCondition(typeof runId === "string" && /^decisionrun_[a-f0-9]{20}$/.test(runId), "runId invalid");
-  const { runId: _ignoredRunId, ...runBody } = run;
-  requireCondition(runId === contentId("decisionrun", runBody), "runId does not match run content");
+  const runIdentity = run.runIdentity as Record<string, unknown> | undefined;
+  requireCondition(runIdentity !== undefined, "runIdentity missing");
+  requireCondition(
+    runId === contentId("decisionrun", runIdentity),
+    "runId does not match cross-runtime run identity"
+  );
   const runnerVectorArtifact = run.vectorArtifact as { rows?: number; sha256?: string } | undefined;
   requireCondition(runnerVectorArtifact?.rows === rawVectors.length, "runner vector row count drifted");
   requireCondition(
     runnerVectorArtifact?.sha256 === sha256(readFileSync(join(inputDir, "vectors.jsonl"))),
     "runner vector digest drifted"
+  );
+  requireCondition(
+    runIdentity.sourceContractSha256 === sha256(readFileSync(resolve(HERE, "../banking77/SOURCE.json"))) &&
+      runIdentity.classifierContractSha256 ===
+        sha256(readFileSync(resolve(HERE, "../banking77/config.v1.json"))) &&
+      runIdentity.decisionConfigSha256 === sha256(readFileSync(resolve(HERE, "config.v1.json"))) &&
+      runIdentity.vectorsSha256 === runnerVectorArtifact.sha256,
+    "runIdentity lineage drifted"
   );
   const continuity = classifierContinuity(rawVectors, labels, config.continuityReference);
 

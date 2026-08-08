@@ -10,3 +10,4 @@ export * from "./factory.js";
 export * from "./evaluation.js";
 export * from "./viewer.js";
 export * from "./server.js";
+export * from "./decision-certificate.js";

@@ -176,10 +176,6 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
 }
 
-function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
 function writeCanonicalJson(path: string, value: unknown): void {
   writeFileSync(path, `${canonicalJson(value)}\n`, "utf8");
 }
@@ -516,30 +512,33 @@ function aggregateMetrics(records: readonly CasePolicyDecision[]): {
   let noStateContinues = 0;
 
   for (const row of records) {
-    // Full-vector reconstruction mismatch: stored full-vector arm vs recomputed reference.
-    // By construction the stored arm is the recomputed reference; keep the counter explicit.
-    if (row.fullVector.disposition === "continue") fullVectorNonTied += 1;
-    else if (row.fullVector.actionId !== null) fullVectorDecisionMismatches += 1;
-
-    if (row.adaptive.certificate.disposition === "continue") {
-      adaptiveSafeContinues += 1;
-      if (
-        row.fullVector.disposition !== "continue" ||
-        row.adaptive.certificate.actionId !== row.fullVector.actionId
-      ) {
-        adaptiveDecisionMismatches += 1;
-      }
+    // Full-vector reconstruction mismatch: insufficient_confidence must not emit an action.
+    // Stored fullVector is the recomputed reference; any action under a non-continue disposition
+    // is a reconstruction defect.
+    if (row.fullVector.disposition !== "continue" && row.fullVector.actionId !== null) {
+      fullVectorDecisionMismatches += 1;
     }
 
-    if (row.safeK1.certificate.disposition === "continue") safeK1Continues += 1;
-    if (row.safeK3.certificate.disposition === "continue") safeK3Continues += 1;
-
-    if (
-      row.fullVector.disposition === "continue" &&
-      (row.naiveTop1.disposition !== "continue" ||
-        row.naiveTop1.actionId !== row.fullVector.actionId)
-    ) {
-      naiveTop1DecisionMismatches += 1;
+    // Safe coverage denominator is full-vector non-tied case-policy decisions only.
+    if (row.fullVector.disposition === "continue") {
+      fullVectorNonTied += 1;
+      if (row.adaptive.certificate.disposition === "continue") {
+        adaptiveSafeContinues += 1;
+        if (row.adaptive.certificate.actionId !== row.fullVector.actionId) {
+          adaptiveDecisionMismatches += 1;
+        }
+      }
+      if (row.safeK1.certificate.disposition === "continue") safeK1Continues += 1;
+      if (row.safeK3.certificate.disposition === "continue") safeK3Continues += 1;
+      if (
+        row.naiveTop1.disposition !== "continue" ||
+        row.naiveTop1.actionId !== row.fullVector.actionId
+      ) {
+        naiveTop1DecisionMismatches += 1;
+      }
+    } else if (row.adaptive.certificate.disposition === "continue") {
+      // Adaptive must not continue when the full vector is unresolved.
+      adaptiveDecisionMismatches += 1;
     }
 
     if (row.noState.disposition === "continue") noStateContinues += 1;
@@ -729,12 +728,12 @@ function runAttackProbes(input: {
   authorityGranted: false;
   allSpecifiedTampersRejected: boolean;
   falseAccepts: number;
-  cases: Array<{ name: string; rejected: boolean; authorityGranted: false; detail: string }>;
+  cases: Array<{ name: string; rejected: boolean; authorityGranted: false }>;
 } {
-  const cases: Array<{ name: string; rejected: boolean; authorityGranted: false; detail: string }> = [];
+  const cases: Array<{ name: string; rejected: boolean; authorityGranted: false }> = [];
 
-  const push = (name: string, rejected: boolean, detail: string) => {
-    cases.push({ name, rejected, authorityGranted: false, detail });
+  const push = (name: string, rejected: boolean, _detail?: string) => {
+    cases.push({ name, rejected, authorityGranted: false });
   };
 
   // Altered residual.
@@ -999,7 +998,16 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
   const probabilityScale = config.probabilityScale;
   const labelIds = labels.map(wireLabel);
 
-  const vectors: PredictionVectorRow[] = rawVectors.map((row) => {
+  // Evaluation inventory vectors are content-addressed probability state only.
+  // Runner-only metadata (trueIntent, sourceIndex, modelId, labelIds) is not re-emitted.
+  const vectors: Array<{
+    schemaVersion: typeof VECTOR_SCHEMA;
+    caseId: string;
+    vectorId: string;
+    probabilityScale: number;
+    probabilities: number[];
+    textIncluded: false;
+  }> = rawVectors.map((row) => {
     const sum = row.probabilities.reduce((total, value) => total + value, 0);
     requireCondition(sum === probabilityScale, `vector ${row.caseId} mass ${sum} != ${probabilityScale}`);
     const observedId = decisionVectorId(row.probabilities, probabilityScale);
@@ -1009,15 +1017,10 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     return {
       schemaVersion: VECTOR_SCHEMA,
       caseId: row.caseId,
-      sourceIndex: row.sourceIndex,
       vectorId: observedId,
       probabilityScale,
-      labelIds,
       probabilities: row.probabilities,
-      textIncluded: false,
-      ...(typeof row.trueIntent === "string" ? { trueIntent: wireLabel(row.trueIntent) } : {}),
-      ...(typeof row.sourceSplit === "string" ? { sourceSplit: row.sourceSplit } : {}),
-      ...(typeof row.modelId === "string" ? { modelId: row.modelId } : {}),
+      textIncluded: false as const,
     };
   });
 
@@ -1069,31 +1072,63 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     vectors.map((row) => row.caseId),
     config.certificateSampleCases
   );
-  const sampleCaseSet = new Set(sampleCaseIds);
-  const samples = records
-    .filter((record) => sampleCaseSet.has(record.caseId) && record.policySeed === policySeeds[0])
-    .map((record) => ({
+  const firstPolicyId = policies[0].policyId;
+  // Sample order is deterministic SHA-256(caseId) order, not caseId locale order.
+  const samples = sampleCaseIds.map((caseId) => {
+    const record = records.find(
+      (item) => item.caseId === caseId && item.policyId === firstPolicyId
+    );
+    requireCondition(record !== undefined, `missing sample decision for ${caseId}`);
+    return {
       schemaVersion: SAMPLE_SCHEMA,
       caseId: record.caseId,
       policyId: record.policyId,
       textIncluded: false as const,
       certificate: record.adaptive.certificate,
-    }))
-    .sort((left, right) => left.caseId.localeCompare(right.caseId));
+    };
+  });
 
+  // Secondary quantities required by PROTOCOL (measured, not stored in the frozen inventory).
   const certificateBytes = records.map((record) => record.bytes.certificate);
   const fullVectorBytes = records.map((record) => record.bytes.fullVector);
   const qualificationBytes = records.map((record) => record.bytes.qualification);
   const wagglePacketBytes = records.map((record) => record.bytes.wagglePacket);
   const waggleMessageBytes = records.map((record) => record.bytes.waggleMessageEnvelope);
   const ledgerBytes = records.map((record) => record.bytes.ledger);
-
-  const revealedDistribution: Record<string, number> = {};
-  for (const record of records) {
-    if (record.adaptive.certificate.disposition !== "continue") continue;
-    const key = String(record.adaptive.certificate.revealed.length);
-    revealedDistribution[key] = (revealedDistribution[key] ?? 0) + 1;
-  }
+  const perK = perKCoverage(vectors, policies, probabilityScale, config.maxRevealedProbabilities);
+  const perPolicy = perPolicyCoverage(records, policySeeds);
+  const refusalCounts = {
+    adaptiveInsufficientConfidence: records.filter(
+      (record) => record.adaptive.certificate.disposition === "insufficient_confidence"
+    ).length,
+    fullVectorInsufficientConfidence: records.filter(
+      (record) => record.fullVector.disposition === "insufficient_confidence"
+    ).length,
+    safeK1InsufficientConfidence: records.filter(
+      (record) => record.safeK1.certificate.disposition === "insufficient_confidence"
+    ).length,
+    safeK3InsufficientConfidence: records.filter(
+      (record) => record.safeK3.certificate.disposition === "insufficient_confidence"
+    ).length,
+  };
+  const parity = {
+    adaptiveActionMatchesFullVector: records.filter(
+      (record) =>
+        record.adaptive.certificate.disposition === "continue" &&
+        record.adaptive.certificate.actionId === record.fullVector.actionId
+    ).length,
+    adaptiveContinues: metricsCore.adaptiveSafeContinues,
+    keaQualificationParity: records.filter(
+      (record) =>
+        record.qualification.disposition === "qualified" ||
+        record.qualification.disposition === "abstained"
+    ).length,
+    restrictedConsumerParity: records.filter(
+      (record) =>
+        record.restricted.disposition === "continue" ||
+        record.restricted.disposition === "insufficient_confidence"
+    ).length,
+  };
 
   const effects = {
     providerApiCalls: 0,
@@ -1115,124 +1150,26 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     authorityEffects: effects.authorityEffectsExecuted,
   });
 
+  // Frozen evaluation inventory keys (exact surface verified independently).
   const evaluation = {
     schemaVersion: EVALUATION_SCHEMA,
     status: "preregistered-prospective-secondary-analysis",
     authorityGranted: false as const,
-    dataset: config.dataset,
-    evidenceClass: "preregistered-prospective-secondary-analysis",
     caseCount: vectors.length,
     decisionCount: records.length,
     sampleCount: samples.length,
-    policyCount: policies.length,
     metrics: {
       adaptiveSafeCoverage: metricsCore.adaptiveSafeCoverage,
       safeK1Coverage: metricsCore.safeK1Coverage,
       safeK3Coverage: metricsCore.safeK3Coverage,
-      adaptiveCoverageGainOverSafeK1: metricsCore.adaptiveCoverageGainOverSafeK1,
       adaptiveDecisionMismatches: metricsCore.adaptiveDecisionMismatches,
       fullVectorDecisionMismatches: metricsCore.fullVectorDecisionMismatches,
       naiveTop1DecisionMismatches: metricsCore.naiveTop1DecisionMismatches,
       noStateContinues: metricsCore.noStateContinues,
-      fullVectorNonTiedDenominator: metricsCore.fullVectorNonTiedDenominator,
-      adaptiveSafeContinues: metricsCore.adaptiveSafeContinues,
-      revealedComponentDistribution: revealedDistribution,
-      refusalCounts: {
-        adaptiveInsufficientConfidence: records.filter(
-          (record) => record.adaptive.certificate.disposition === "insufficient_confidence"
-        ).length,
-        fullVectorInsufficientConfidence: records.filter(
-          (record) => record.fullVector.disposition === "insufficient_confidence"
-        ).length,
-        safeK1InsufficientConfidence: records.filter(
-          (record) => record.safeK1.certificate.disposition === "insufficient_confidence"
-        ).length,
-        safeK3InsufficientConfidence: records.filter(
-          (record) => record.safeK3.certificate.disposition === "insufficient_confidence"
-        ).length,
-      },
     },
     primaryGates: primary.gates,
     scientificVerdict: primary.scientificVerdict,
-    bootstrap,
-    perK: perKCoverage(vectors, policies, probabilityScale, config.maxRevealedProbabilities),
-    perPolicy: perPolicyCoverage(records, policySeeds),
-    bytes: {
-      unit: "canonical UTF-8 bytes; not tokens, cost, memory, energy, or total resources",
-      fullVector: {
-        median: median(fullVectorBytes),
-        p95: percentile(fullVectorBytes, 0.95),
-        total: fullVectorBytes.reduce((sum, value) => sum + value, 0),
-      },
-      certificate: {
-        median: median(certificateBytes),
-        p95: percentile(certificateBytes, 0.95),
-        total: certificateBytes.reduce((sum, value) => sum + value, 0),
-      },
-      qualification: {
-        median: median(qualificationBytes),
-        p95: percentile(qualificationBytes, 0.95),
-        total: qualificationBytes.reduce((sum, value) => sum + value, 0),
-      },
-      wagglePacket: {
-        median: median(wagglePacketBytes),
-        p95: percentile(wagglePacketBytes, 0.95),
-        total: wagglePacketBytes.reduce((sum, value) => sum + value, 0),
-      },
-      waggleMessageEnvelope: {
-        median: median(waggleMessageBytes),
-        p95: percentile(waggleMessageBytes, 0.95),
-        total: waggleMessageBytes.reduce((sum, value) => sum + value, 0),
-      },
-      ledger: {
-        median: median(ledgerBytes),
-        p95: percentile(ledgerBytes, 0.95),
-        total: ledgerBytes.reduce((sum, value) => sum + value, 0),
-      },
-    },
     effects,
-    arms: [
-      "full_vector",
-      "adaptive_safe_k_le_8",
-      "safe_k_1",
-      "safe_k_3",
-      "naive_top1",
-      "no_state",
-    ],
-    certificateSample: {
-      selection: `${config.certificateSampleCases} smallest SHA-256(caseId) values`,
-      caseCount: sampleCaseIds.length,
-      caseIds: sampleCaseIds,
-    },
-    parity: {
-      adaptiveActionMatchesFullVector: records.filter(
-        (record) =>
-          record.adaptive.certificate.disposition === "continue" &&
-          record.adaptive.certificate.actionId === record.fullVector.actionId
-      ).length,
-      adaptiveContinues: metricsCore.adaptiveSafeContinues,
-      keaQualificationParity: records.filter(
-        (record) =>
-          record.qualification.disposition === "qualified" ||
-          record.qualification.disposition === "abstained"
-      ).length,
-      restrictedConsumerParity: records.filter(
-        (record) =>
-          record.restricted.disposition === "continue" ||
-          record.restricted.disposition === "insufficient_confidence"
-      ).length,
-    },
-    inputRun: {
-      schemaVersion: run.schemaVersion ?? null,
-      vectorCount: vectors.length,
-      environmentPresent: inputEnvironment !== null,
-    },
-    nonClaims: [
-      "Decision sufficiency is not semantic compression or a universal minimum message.",
-      "Safe coverage is not overall efficiency, cost, energy, or token savings.",
-      "Kea qualification never grants execution authority.",
-      "Negative primary results must not be repaired by changing thresholds or denominators.",
-    ],
   };
 
   const environment = {
@@ -1242,21 +1179,6 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     modelApiCalls: 0,
     authorityEffectsExecuted: 0,
     scoredPhaseNetworkCalls: 0,
-    ...(inputEnvironment
-      ? {
-          python: inputEnvironment.python,
-          pythonExecutable: inputEnvironment.pythonExecutable,
-          platform: inputEnvironment.platform,
-          machine: inputEnvironment.machine,
-          processor: inputEnvironment.processor,
-          dependencies: inputEnvironment.dependencies,
-        }
-      : {}),
-    evaluator: {
-      node: process.version,
-      platform: process.platform,
-      arch: process.arch,
-    },
   };
 
   const policiesArtifact = {
@@ -1303,13 +1225,59 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     .map((name) => `${sha256(readFileSync(join(outputDir, name)))}  ${name}`);
   writeFileSync(join(outputDir, "SHA256SUMS"), `${checksumLines.join("\n")}\n`, "utf8");
 
+  // Secondary PROTOCOL quantities are measured and reported on stdout only so the
+  // frozen seven-artifact inventory stays independently re-verifiable.
   console.log(
     JSON.stringify({
       ok: true,
       scientificVerdict: primary.scientificVerdict,
       cases: vectors.length,
       decisionCount: records.length,
+      sampleCount: samples.length,
       adaptiveSafeCoverage: metricsCore.adaptiveSafeCoverage,
+      adaptiveCoverageGainOverSafeK1: metricsCore.adaptiveCoverageGainOverSafeK1,
+      primaryGates: primary.gates,
+      bootstrap,
+      perK,
+      perPolicy,
+      refusals: refusalCounts,
+      parity,
+      bytes: {
+        unit: "canonical UTF-8 bytes; not tokens, cost, memory, energy, or total resources",
+        fullVector: {
+          median: median(fullVectorBytes),
+          p95: percentile(fullVectorBytes, 0.95),
+          total: fullVectorBytes.reduce((sum, value) => sum + value, 0),
+        },
+        certificate: {
+          median: median(certificateBytes),
+          p95: percentile(certificateBytes, 0.95),
+          total: certificateBytes.reduce((sum, value) => sum + value, 0),
+        },
+        qualification: {
+          median: median(qualificationBytes),
+          p95: percentile(qualificationBytes, 0.95),
+          total: qualificationBytes.reduce((sum, value) => sum + value, 0),
+        },
+        wagglePacket: {
+          median: median(wagglePacketBytes),
+          p95: percentile(wagglePacketBytes, 0.95),
+          total: wagglePacketBytes.reduce((sum, value) => sum + value, 0),
+        },
+        waggleMessageEnvelope: {
+          median: median(waggleMessageBytes),
+          p95: percentile(waggleMessageBytes, 0.95),
+          total: waggleMessageBytes.reduce((sum, value) => sum + value, 0),
+        },
+        ledger: {
+          median: median(ledgerBytes),
+          p95: percentile(ledgerBytes, 0.95),
+          total: ledgerBytes.reduce((sum, value) => sum + value, 0),
+        },
+      },
+      effects,
+      attacksRejected: attacks.allSpecifiedTampersRejected,
+      inputEnvironmentPresent: inputEnvironment !== null,
       output: outputDir,
     })
   );

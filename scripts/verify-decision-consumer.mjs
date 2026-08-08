@@ -49,7 +49,31 @@ try {
   });
   if (result.status !== 0) throw new Error(`${result.stdout}${result.stderr}`);
   const observed = JSON.parse(result.stdout);
-  if (canonical(observed) !== canonical(sample.restricted)) {
+  const expectedKeys = [
+    "actionId",
+    "authorityGranted",
+    "certificateId",
+    "disposition",
+    "qualificationId",
+    "schemaVersion",
+  ];
+  if (canonical(Object.keys(observed).sort()) !== canonical(expectedKeys)) {
+    throw new Error("fresh restricted consumer receipt fields drifted");
+  }
+  if (
+    observed.schemaVersion !== "kea.restricted-decision.v1" ||
+    observed.certificateId !== sample.certificate.certificateId ||
+    observed.qualificationId !== sample.qualification.qualificationId ||
+    observed.authorityGranted !== false
+  ) {
+    throw new Error("fresh restricted consumer receipt lineage drifted");
+  }
+  const observedProjection = {
+    disposition: observed.disposition,
+    actionId: observed.actionId,
+    authorityGranted: observed.authorityGranted,
+  };
+  if (canonical(observedProjection) !== canonical(sample.restricted)) {
     throw new Error("fresh restricted consumer disagreed with frozen sample");
   }
   process.stdout.write(

@@ -4,7 +4,8 @@ Status: release control document
 
 Author: William Keenan
 
-Evidence boundary: public fixtures plus the frozen C15d aggregate
+Evidence boundary: public fixtures, the frozen C15d aggregate, and the frozen
+v0.3 decision-sufficiency reference package
 
 Every public claim must name its evidence class and preserve its limitation.
 Ambiguous evidence is reported as a hypothesis or rejected.
@@ -19,6 +20,11 @@ Ambiguous evidence is reported as a hypothesis or rejected.
 | C06 | Native branch-query handoff bytes were smaller in this run | Bounded local aggregate | 2,307 query bytes, 53,415 repeated full-text prompt bytes, and 279,321,005 retained-state bytes | “The measured branch-query handoff was smaller while retained state and qualification overhead remained material.” | Token, credit, memory, energy, cost, or total-resource savings. |
 | C07 | The no-state consumer abstained | Bounded local aggregate | 6/6 no-state abstentions | “The restricted no-state consumer abstained on every frozen task.” | General safety, alignment, or deployment claims. |
 | C08 | The public package is not an independent replication package | Publication boundary | Public inventory excludes raw native state and the full execution corpus | “The implementation and aggregate are internally checkable; the central model run is not independently reproducible from this package.” | Third-party verification, public raw-state availability, or independent replication. |
+| C09 | A partial probability prefix can carry an exact robust action certificate | Public theorem plus exhaustive fixture | `benchmarks/decision-sufficiency/PROTOCOL.md`, exhaustive small-simplex test, and independent verifier | “For the frozen finite cost policy, Kea proves the selected action for every completion of the omitted mass.” | Universal semantic sufficiency, globally minimum communication, or arbitrary-policy proof. |
+| C10 | The adaptive certificate safely continued on 35,013/36,600 decisions | Prospective secondary analysis | Accepted Trial 6 `evaluation.json`; zero adaptive mismatches | “The certificate safely covered 95.66% of frozen non-tied case-policy decisions with zero observed action mismatches.” | Cross-dataset/model generalization, independent model replication, or universal reliability. |
+| C11 | The preregistered primary hypothesis was rejected | Prospective secondary analysis | Gain over safe `k=1` was 6.65 points versus a frozen 10-point requirement | “The v0.3 primary hypothesis was rejected even though the coverage gate passed.” | Selective reporting of the positive coverage gate as primary success. |
+| C12 | The strongest compact informed control was smaller | Public byte audit | Median expected-cost summary 390 bytes, certificate 680 bytes, full vector 491.5 bytes | “The certificate exposed a robust proof boundary, but did not win the frozen byte comparison.” | Compression, encoding, token, credit, cost, or overall-efficiency advantage. |
+| C13 | A fresh restricted process consumed the qualified decision without source state | Public process isolation | `verify-decision-consumer.mjs` and accepted reference sample | “The fresh consumer received the qualified projection, not source text, the true label, or the full vector, and authority remained false.” | Privacy, security against an authenticated malicious writer, or autonomous execution. |
 
 ## Update rule
 

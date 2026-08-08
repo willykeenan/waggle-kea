@@ -21,6 +21,9 @@ separated from authority to act?
   fresh-native control, so the overall-efficiency claim was rejected.
 - Every public reference-implementation test executes with zero model calls,
   network calls, and authority effects.
+- The separately preregistered v0.3 decision-sufficiency study safely qualified
+  35,013/36,600 frozen case-policy decisions with zero action mismatches, but
+  retained the null because its gain over safe `k=1` missed the frozen gate.
 
 The negative result is part of the release. It keeps an attractive mechanism
 separate from an unsupported performance claim.
@@ -35,6 +38,7 @@ separate from an unsupported performance claim.
 | [`RESULTS-C15D.md`](RESULTS-C15D.md) | Bounded local model/hardware result, controls, and limitations |
 | [`data/c15d-summary.json`](data/c15d-summary.json) | Machine-readable aggregate of the reported experiment |
 | [`verify.mjs`](verify.mjs) | Offline structural and claim-boundary verifier |
+| [`../benchmarks/decision-sufficiency/`](../benchmarks/decision-sufficiency/RESULT.md) | Public v0.3 protocol, complete decision evidence, controls, negative verdict, and independent verifier |
 
 ## Verify locally
 

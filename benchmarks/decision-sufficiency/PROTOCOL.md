@@ -89,6 +89,26 @@ At most eight of 77 probabilities may be revealed. Failure to certify within
 that budget returns `insufficient_confidence`; it never falls back to the
 nominal top class.
 
+### Exact theorem used by the certificate
+
+Let `C[a,i]` be the frozen integer cost of action `a` at label `i`, let `R` be
+the revealed indices, let `O` be the omitted indices, and let `r` be the exact
+omitted probability mass. For candidate `a` and opponent `b`, define
+
+`L(a,b) = sum(i in R) p[i] * (C[b,i] - C[a,i]) + r * min(i in O)(C[b,i] - C[a,i])`.
+
+The omitted contribution is linear over a simplex, so its minimum is attained
+by placing all omitted mass on an omitted label with minimum cost difference.
+Therefore `L(a,b)` is the exact worst-case value of `cost(b)-cost(a)` over all
+completions. A fixed candidate `a` is the unique minimum-cost action for every
+completion if and only if `L(a,b) > 0` for every opponent `b`. The strict
+inequality rejects ties.
+
+The implementation reveals components in the frozen descending-probability
+order and returns the **first certifying prefix** in that chain. It does not
+claim the globally smallest subset, the shortest possible encoding, or a
+minimum universal message.
+
 ## Matched controls
 
 Every case-policy pair is evaluated with identical prediction information and
@@ -99,7 +119,20 @@ policy:
 3. fixed safe certificate with at most 1 probability;
 4. fixed safe certificate with at most 3 probabilities;
 5. naive top-1 action with no residual-mass proof; and
-6. no-state, required to abstain.
+6. a content-addressed four-action expected-cost summary, computed from the
+   complete vector and independently checked by the frozen verifier; and
+7. no-state, required to abstain.
+
+The expected-cost summary is the strongest compact informed control for this
+policy family. It is allowed to tie or beat the certificate in bytes and
+decision utility. Unlike the partial certificate, it does not expose a proof
+that is valid under every completion of omitted probability mass; it relies on
+Kea's prior full-vector check. Its presence prevents a smaller-message result
+from being mislabeled as a unique encoding or compression advantage.
+
+The full-vector arm is serialized to canonical JSON, decoded in a separate
+round-trip step, content-addressed again, and then scored. A self-comparison of
+one in-memory reference object does not count as reconstruction evidence.
 
 Canonical JSON and Waggle/Kea carry the same certificate semantics. Payload,
 envelope, qualification, and ledger bytes are reported separately. A compact
@@ -115,7 +148,8 @@ artifact is larger than canonical JSON.
 - its safe coverage exceeds safe `k=1` coverage by at least 10 percentage
   points;
 - every adaptive continuation matches the full-vector action;
-- the full-vector control has zero reconstruction mismatch;
+- the canonical full-vector round trip has zero ID or decision mismatch;
+- the verified expected-cost summary has zero decision mismatch;
 - naive top-1 differs from the full-vector action at least once, demonstrating
   that a label alone is not generally sufficient;
 - no-state continues zero times;
@@ -127,9 +161,11 @@ Otherwise the result is `H0_RETAINED`. A negative result is valid and must not
 be repaired by changing policies, budgets, thresholds, cases, or denominators.
 
 Secondary quantities include safe coverage at every `k` from 1 through 8,
-revealed-component distributions, case-clustered bootstrap intervals, per-policy
-coverage, full-state and certificate bytes, Waggle/Kea overhead, model quality
-for continuity only, and exact refusal counts. They cannot replace a failed
+revealed-component distributions, case-clustered bootstrap intervals,
+per-policy coverage, full-state, certificate, and expected-cost-summary bytes,
+Waggle/Kea overhead, model accuracy and macro-F1 for continuity only, and exact
+refusal counts. They are committed to `evaluation.json` and independently
+recomputed; stdout is not durable evidence. They cannot replace a failed
 primary gate.
 
 ## Falsification and attacks
@@ -146,8 +182,11 @@ as a limitation.
 
 The experiment is informed by information-bottleneck work on bounded multi-
 agent relays, decision-sufficient representations, selective classification,
-and minimum-necessary agent disclosure. It does not claim to invent any of
-those fields. Its narrower contribution is an inspectable, integer-exact
+minimum-necessary agent disclosure, and same-decision probability. It does not
+claim to invent any of those fields. Same-decision probability asks for a
+probability that a partially observed system selects the same decision; this
+experiment instead gives a deterministic all-completions certificate under a
+frozen cost policy. Its narrower contribution is an inspectable, integer-exact
 decision certificate with an independent Kea verifier and a source-separated
 consumer on one public multiclass workload.
 
@@ -158,6 +197,8 @@ consumer on one public multiclass workload.
 - Xu et al. (2026), “MNC: Scope-Bound Semantic Declassification for Private
   LLM-Agent Communication,” arXiv:2608.01719.
 - Cattelan and Silva (2024), “How to Fix a Broken Confidence Estimator,” UAI.
+- Chen, Choi, and Darwiche (2014), “Algorithms and Applications for the
+  Same-Decision Probability,” JAIR.
 
 ## Non-claims
 

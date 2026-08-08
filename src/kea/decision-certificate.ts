@@ -46,6 +46,81 @@ function qualificationBody(value: Omit<KeaDecisionQualification, "qualificationI
   };
 }
 
+export function validateDecisionQualification(value: unknown): string[] {
+  const errors: string[] = [];
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return ["qualification must be a plain object"];
+  }
+  const qualification = value as Partial<KeaDecisionQualification>;
+  const expectedKeys = [
+    "authorityGranted",
+    "certificateId",
+    "certificateMathVerified",
+    "disposition",
+    "errors",
+    "policyId",
+    "qualificationId",
+    "referenceDecisionMatched",
+    "schemaVersion",
+    "sourceVectorVerified",
+    "vectorId",
+  ];
+  if (canonicalJson(Object.keys(qualification).sort()) !== canonicalJson(expectedKeys)) {
+    errors.push("qualification fields are not canonical");
+  }
+  if (qualification.schemaVersion !== "kea.decision-qualification.v1") {
+    errors.push("qualification schemaVersion is invalid");
+  }
+  if (
+    typeof qualification.qualificationId !== "string" ||
+    !/^keaqualification_[a-f0-9]{20}$/.test(qualification.qualificationId)
+  ) {
+    errors.push("qualificationId is invalid");
+  }
+  if (
+    typeof qualification.certificateId !== "string" ||
+    !/^decisioncert_[a-f0-9]{20}$/.test(qualification.certificateId)
+  ) {
+    errors.push("qualification certificateId is invalid");
+  }
+  if (
+    typeof qualification.policyId !== "string" ||
+    !/^decisionpolicy_[a-f0-9]{20}$/.test(qualification.policyId)
+  ) {
+    errors.push("qualification policyId is invalid");
+  }
+  if (
+    typeof qualification.vectorId !== "string" ||
+    !/^decisionvector_[a-f0-9]{20}$/.test(qualification.vectorId)
+  ) {
+    errors.push("qualification vectorId is invalid");
+  }
+  if (!(["qualified", "abstained", "rejected"] as const).includes(qualification.disposition as never)) {
+    errors.push("qualification disposition is invalid");
+  }
+  for (const key of [
+    "sourceVectorVerified",
+    "certificateMathVerified",
+    "referenceDecisionMatched",
+  ] as const) {
+    if (typeof qualification[key] !== "boolean") errors.push(`qualification ${key} is invalid`);
+  }
+  if (!Array.isArray(qualification.errors) || qualification.errors.some((item) => typeof item !== "string")) {
+    errors.push("qualification errors must be a string array");
+  }
+  if (qualification.authorityGranted !== false) errors.push("qualification cannot grant authority");
+  if (errors.length === 0) {
+    const expectedId = contentId(
+      "keaqualification",
+      qualificationBody(qualification as KeaDecisionQualification)
+    );
+    if (qualification.qualificationId !== expectedId) {
+      errors.push("qualificationId does not match qualification content");
+    }
+  }
+  return errors;
+}
+
 export function qualifyDecisionCertificate(input: {
   certificate: WaggleDecisionCertificate;
   policy: WaggleDecisionPolicy;
@@ -112,9 +187,9 @@ export function consumeQualifiedDecision(input: {
   qualification: KeaDecisionQualification;
 }): KeaRestrictedDecision {
   const mathErrors = verifyDecisionCertificateMath(input.certificate, input.policy);
-  const qualificationId = contentId("keaqualification", qualificationBody(input.qualification));
+  const qualificationErrors = validateDecisionQualification(input.qualification);
   const validQualification =
-    qualificationId === input.qualification.qualificationId &&
+    qualificationErrors.length === 0 &&
     input.qualification.certificateId === input.certificate.certificateId &&
     input.qualification.policyId === input.policy.policyId &&
     input.qualification.vectorId === input.certificate.vectorId &&
@@ -149,7 +224,10 @@ export function consumeQualifiedDecision(input: {
     disposition,
     actionId,
     certificateId: input.certificate.certificateId,
-    qualificationId: input.qualification.qualificationId,
+    qualificationId:
+      typeof input.qualification?.qualificationId === "string"
+        ? input.qualification.qualificationId
+        : `keaqualification_${"0".repeat(20)}`,
     authorityGranted: false,
   };
 }

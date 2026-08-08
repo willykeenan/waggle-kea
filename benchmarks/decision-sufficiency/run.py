@@ -24,7 +24,6 @@ import re
 import sys
 import urllib.request
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -394,11 +393,9 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
     vectors_payload = ("\n".join(lines) + "\n").encode("utf-8")
     vectors_path.write_bytes(vectors_payload)
 
-    run = {
+    run_body = {
         "schemaVersion": RUN_SCHEMA,
-        "runId": "decision-sufficiency-state-v1",
         "status": decision_config["status"],
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
         "author": "William Keenan",
         "evidenceClass": "preregistered-prospective-secondary-analysis",
         # Top-level inventory is required by the evaluator loader (run.labelIds / run.probabilityScale).
@@ -433,8 +430,6 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
             "trainingRuns": 1,
             "scoredCases": len(test),
             "vectorComponents": 77,
-            "cachePath": str(cache),
-            "outputPath": str(output),
         },
         "vectorArtifact": {
             "rows": len(lines),
@@ -458,6 +453,7 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
             "No autonomous execution authority is granted by any vector or run artifact.",
         ],
     }
+    run = {**run_body, "runId": content_id("decisionrun", run_body)}
     write_json(output / "run.json", run)
 
     import joblib

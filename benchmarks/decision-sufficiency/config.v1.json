@@ -25,8 +25,14 @@
     "adaptiveCoverageGainOverSafeK1Minimum": 0.1,
     "adaptiveDecisionMismatchesMaximum": 0,
     "fullVectorDecisionMismatchesMaximum": 0,
+    "expectedCostSummaryDecisionMismatchesMaximum": 0,
     "naiveTop1DecisionMismatchesMinimum": 1,
     "noStateContinuesMaximum": 0
+  },
+  "continuityReference": {
+    "accuracy": 0.9114754098360656,
+    "macroF1": 0.9118581227515896,
+    "maximumAbsoluteDrift": 1e-12
   },
   "certificateSampleCases": 128,
   "effects": {

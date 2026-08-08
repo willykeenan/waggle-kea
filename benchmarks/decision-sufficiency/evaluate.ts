@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 
 import {
   MemoryKeaLedger,
@@ -56,13 +57,16 @@ const ATTACKS_SCHEMA = "waggle.decision-sufficiency.attacks.v1";
 const VECTOR_SCHEMA = "waggle.decision-sufficiency.vector.v1";
 const DECISION_ROW_SCHEMA = "waggle.decision-sufficiency.decision.v1";
 const SAMPLE_SCHEMA = "waggle.decision-sufficiency.sample.v1";
+const FULL_VECTOR_STATE_SCHEMA = "waggle.decision-sufficiency.full-vector.v1";
+const COST_SUMMARY_SCHEMA = "waggle.decision-sufficiency.cost-summary.v1";
 
 const REQUIRED_ARTIFACTS = [
   "attacks.json",
-  "decisions.jsonl",
+  "decisions.jsonl.gz",
   "environment.json",
   "evaluation.json",
   "policies.json",
+  "run.json",
   "samples.jsonl",
   "vectors.jsonl",
 ] as const;
@@ -94,8 +98,14 @@ interface DecisionSufficiencyConfig {
     adaptiveCoverageGainOverSafeK1Minimum: number;
     adaptiveDecisionMismatchesMaximum: number;
     fullVectorDecisionMismatchesMaximum: number;
+    expectedCostSummaryDecisionMismatchesMaximum: number;
     naiveTop1DecisionMismatchesMinimum: number;
     noStateContinuesMaximum: number;
+  };
+  continuityReference: {
+    accuracy: number;
+    macroF1: number;
+    maximumAbsoluteDrift: number;
   };
   certificateSampleCases: number;
   effects: {
@@ -129,6 +139,23 @@ interface CasePolicyDecision {
     disposition: "continue" | "insufficient_confidence";
     actionId: string | null;
   };
+  fullVectorReconstruction: {
+    encoding: "canonical-json";
+    vectorId: string;
+    disposition: "continue" | "insufficient_confidence";
+    actionId: string | null;
+  };
+  expectedCostSummary: {
+    schemaVersion: typeof COST_SUMMARY_SCHEMA;
+    summaryId: string;
+    caseId: string;
+    policyId: string;
+    vectorId: string;
+    actionCostUnits: number[];
+    disposition: "continue" | "insufficient_confidence";
+    actionId: string | null;
+    authorityGranted: false;
+  };
   adaptive: { certificate: WaggleDecisionCertificate };
   safeK1: { certificate: WaggleDecisionCertificate };
   safeK3: { certificate: WaggleDecisionCertificate };
@@ -140,11 +167,7 @@ interface CasePolicyDecision {
     disposition: "abstain";
     actionId: null;
   };
-  qualification: {
-    disposition: KeaDecisionQualification["disposition"];
-    authorityGranted: false;
-    qualificationId: string;
-  };
+  qualification: KeaDecisionQualification;
   restricted: {
     disposition: "continue" | "insufficient_confidence" | "abstain";
     actionId: string | null;
@@ -157,6 +180,7 @@ interface CasePolicyDecision {
     wagglePacket: number;
     waggleMessageEnvelope: number;
     ledger: number;
+    expectedCostSummary: number;
   };
 }
 
@@ -225,6 +249,74 @@ function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function summarizeIntegers(values: readonly number[]) {
+  requireCondition(values.length > 0, "cannot summarize an empty integer series");
+  return {
+    minimum: Math.min(...values),
+    median: median([...values]),
+    p95: percentile([...values], 0.95),
+    maximum: Math.max(...values),
+    total: values.reduce((sum, value) => sum + value, 0),
+  };
+}
+
+function classifierContinuity(
+  rows: readonly PredictionVectorRow[],
+  labelIds: readonly string[],
+  reference: DecisionSufficiencyConfig["continuityReference"]
+) {
+  const labels = [...labelIds];
+  const byLabel = new Map(labels.map((label) => [label, { tp: 0, fp: 0, fn: 0 }]));
+  let correct = 0;
+  for (const row of rows) {
+    requireCondition(typeof row.trueIntent === "string", `trueIntent missing for ${row.caseId}`);
+    requireCondition(byLabel.has(row.trueIntent), `unknown trueIntent for ${row.caseId}`);
+    let predictedIndex = 0;
+    for (let index = 1; index < row.probabilities.length; index += 1) {
+      if (row.probabilities[index] > row.probabilities[predictedIndex]) predictedIndex = index;
+    }
+    const predicted = labels[predictedIndex];
+    if (predicted === row.trueIntent) {
+      correct += 1;
+      byLabel.get(predicted)!.tp += 1;
+    } else {
+      byLabel.get(predicted)!.fp += 1;
+      byLabel.get(row.trueIntent)!.fn += 1;
+    }
+  }
+  const accuracy = correct / rows.length;
+  const macroF1 =
+    [...byLabel.values()].reduce((sum, value) => {
+      const denominator = 2 * value.tp + value.fp + value.fn;
+      return sum + (denominator === 0 ? 0 : (2 * value.tp) / denominator);
+    }, 0) / labels.length;
+  const accuracyAbsoluteDrift = Math.abs(accuracy - reference.accuracy);
+  const macroF1AbsoluteDrift = Math.abs(macroF1 - reference.macroF1);
+  return {
+    quantizedVectorAccuracy: accuracy,
+    quantizedVectorMacroF1: macroF1,
+    publishedV02Accuracy: reference.accuracy,
+    publishedV02MacroF1: reference.macroF1,
+    maximumAbsoluteDrift: reference.maximumAbsoluteDrift,
+    accuracyAbsoluteDrift,
+    macroF1AbsoluteDrift,
+    continuityPassed:
+      accuracyAbsoluteDrift <= reference.maximumAbsoluteDrift &&
+      macroF1AbsoluteDrift <= reference.maximumAbsoluteDrift,
+  };
+}
+
+function compactCertificate(certificate: WaggleDecisionCertificate) {
+  return {
+    certificateId: certificate.certificateId,
+    disposition: certificate.disposition,
+    actionId: certificate.actionId,
+    revealedCount: certificate.revealed.length,
+    residualUnits: certificate.residualUnits,
+    authorityGranted: false as const,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +425,7 @@ function measureTransportBytes(
   wagglePacket: number;
   waggleMessageEnvelope: number;
   ledger: number;
+  expectedCostSummary: number;
 } {
   const packet = certificatePacket(certificate);
   const message = createWaggleV0Message({
@@ -381,7 +474,42 @@ function measureTransportBytes(
     wagglePacket: waggleWireBytes(packet),
     waggleMessageEnvelope: decisionStateBytes(message),
     ledger: decisionStateBytes(syntheticLedger.read()),
+    expectedCostSummary: 0,
   };
+}
+
+function canonicalFullVectorState(input: {
+  vectorId: string;
+  probabilityScale: number;
+  probabilities: readonly number[];
+}) {
+  return {
+    schemaVersion: FULL_VECTOR_STATE_SCHEMA,
+    vectorId: input.vectorId,
+    probabilityScale: input.probabilityScale,
+    probabilities: [...input.probabilities],
+  };
+}
+
+function createExpectedCostSummary(input: {
+  caseId: string;
+  vectorId: string;
+  policy: WaggleDecisionPolicy;
+  disposition: "continue" | "insufficient_confidence";
+  actionId: string | null;
+  actionCostUnits: readonly number[];
+}) {
+  const body = {
+    schemaVersion: COST_SUMMARY_SCHEMA,
+    caseId: input.caseId,
+    policyId: input.policy.policyId,
+    vectorId: input.vectorId,
+    actionCostUnits: [...input.actionCostUnits],
+    disposition: input.disposition,
+    actionId: input.actionId,
+    authorityGranted: false as const,
+  };
+  return { ...body, summaryId: contentId("decisioncostsummary", body) };
 }
 
 function evaluateCasePolicy(input: {
@@ -395,6 +523,38 @@ function evaluateCasePolicy(input: {
   measureTransport: boolean;
 }): CasePolicyDecision {
   const full = referenceDecision(input.probabilities, input.probabilityScale, input.policy);
+  const encodedFullVector = Buffer.from(
+    canonicalJson(
+      canonicalFullVectorState({
+        vectorId: input.vectorId,
+        probabilityScale: input.probabilityScale,
+        probabilities: input.probabilities,
+      })
+    ),
+    "utf8"
+  );
+  const decodedFullVector = JSON.parse(encodedFullVector.toString("utf8")) as {
+    vectorId: string;
+    probabilityScale: number;
+    probabilities: number[];
+  };
+  const reconstructedVectorId = decisionVectorId(
+    decodedFullVector.probabilities,
+    decodedFullVector.probabilityScale
+  );
+  const reconstructed = referenceDecision(
+    decodedFullVector.probabilities,
+    decodedFullVector.probabilityScale,
+    input.policy
+  );
+  const expectedCostSummary = createExpectedCostSummary({
+    caseId: input.caseId,
+    vectorId: input.vectorId,
+    policy: input.policy,
+    disposition: full.disposition,
+    actionId: full.actionId,
+    actionCostUnits: full.actionCostUnits,
+  });
   const adaptiveCertificate = createDecisionCertificate({
     caseId: input.caseId,
     probabilities: input.probabilities,
@@ -442,11 +602,10 @@ function evaluateCasePolicy(input: {
         wagglePacket: 0,
         waggleMessageEnvelope: 0,
         ledger: 0,
+        expectedCostSummary: 0,
       };
-  bytes.fullVector = decisionStateBytes({
-    probabilityScale: input.probabilityScale,
-    probabilities: input.probabilities,
-  });
+  bytes.fullVector = encodedFullVector.byteLength;
+  bytes.expectedCostSummary = decisionStateBytes(expectedCostSummary);
 
   return {
     schemaVersion: DECISION_ROW_SCHEMA,
@@ -459,6 +618,13 @@ function evaluateCasePolicy(input: {
       disposition: full.disposition,
       actionId: full.actionId,
     },
+    fullVectorReconstruction: {
+      encoding: "canonical-json",
+      vectorId: reconstructedVectorId,
+      disposition: reconstructed.disposition,
+      actionId: reconstructed.actionId,
+    },
+    expectedCostSummary,
     adaptive: { certificate: adaptiveCertificate },
     safeK1: { certificate: safeK1Certificate },
     safeK3: { certificate: safeK3Certificate },
@@ -470,11 +636,7 @@ function evaluateCasePolicy(input: {
       disposition: "abstain",
       actionId: null,
     },
-    qualification: {
-      disposition: qualification.disposition,
-      authorityGranted: false,
-      qualificationId: qualification.qualificationId,
-    },
+    qualification,
     restricted: {
       disposition: restricted.disposition,
       actionId: restricted.actionId,
@@ -499,6 +661,7 @@ function aggregateMetrics(records: readonly CasePolicyDecision[]): {
   adaptiveCoverageGainOverSafeK1: number;
   adaptiveDecisionMismatches: number;
   fullVectorDecisionMismatches: number;
+  expectedCostSummaryDecisionMismatches: number;
   naiveTop1DecisionMismatches: number;
   noStateContinues: number;
 } {
@@ -508,15 +671,23 @@ function aggregateMetrics(records: readonly CasePolicyDecision[]): {
   let safeK3Continues = 0;
   let adaptiveDecisionMismatches = 0;
   let fullVectorDecisionMismatches = 0;
+  let expectedCostSummaryDecisionMismatches = 0;
   let naiveTop1DecisionMismatches = 0;
   let noStateContinues = 0;
 
   for (const row of records) {
-    // Full-vector reconstruction mismatch: insufficient_confidence must not emit an action.
-    // Stored fullVector is the recomputed reference; any action under a non-continue disposition
-    // is a reconstruction defect.
-    if (row.fullVector.disposition !== "continue" && row.fullVector.actionId !== null) {
+    if (
+      row.fullVectorReconstruction.vectorId !== row.vectorId ||
+      row.fullVectorReconstruction.disposition !== row.fullVector.disposition ||
+      row.fullVectorReconstruction.actionId !== row.fullVector.actionId
+    ) {
       fullVectorDecisionMismatches += 1;
+    }
+    if (
+      row.expectedCostSummary.disposition !== row.fullVector.disposition ||
+      row.expectedCostSummary.actionId !== row.fullVector.actionId
+    ) {
+      expectedCostSummaryDecisionMismatches += 1;
     }
 
     // Safe coverage denominator is full-vector non-tied case-policy decisions only.
@@ -560,6 +731,7 @@ function aggregateMetrics(records: readonly CasePolicyDecision[]): {
     adaptiveCoverageGainOverSafeK1: adaptiveSafeCoverage - safeK1Coverage,
     adaptiveDecisionMismatches,
     fullVectorDecisionMismatches,
+    expectedCostSummaryDecisionMismatches,
     naiveTop1DecisionMismatches,
     noStateContinues,
   };
@@ -676,6 +848,7 @@ function recomputePrimaryGates(
     safeK1Coverage: number;
     adaptiveDecisionMismatches: number;
     fullVectorDecisionMismatches: number;
+    expectedCostSummaryDecisionMismatches: number;
     naiveTop1DecisionMismatches: number;
     noStateContinues: number;
     attacksRejected: boolean;
@@ -699,6 +872,9 @@ function recomputePrimaryGates(
       metrics.adaptiveDecisionMismatches <= admission.adaptiveDecisionMismatchesMaximum,
     fullVectorDecisionMismatches:
       metrics.fullVectorDecisionMismatches <= admission.fullVectorDecisionMismatchesMaximum,
+    expectedCostSummaryDecisionMismatches:
+      metrics.expectedCostSummaryDecisionMismatches <=
+      admission.expectedCostSummaryDecisionMismatchesMaximum,
     naiveTop1DecisionMismatches:
       metrics.naiveTop1DecisionMismatches >= admission.naiveTop1DecisionMismatchesMinimum,
     noStateContinues: metrics.noStateContinues <= admission.noStateContinuesMaximum,
@@ -816,13 +992,12 @@ function runAttackProbes(input: {
 
   // Vector ID drift via qualification.
   {
-    const wrongVector = input.probabilities.map((value, index) =>
-      index === 0 ? Math.max(0, value - 1) : index === 1 ? value + 1 : value
-    );
-    const sum = wrongVector.reduce((total, value) => total + value, 0);
-    if (sum !== input.certificate.probabilityScale) {
-      wrongVector[wrongVector.length - 1] += input.certificate.probabilityScale - sum;
-    }
+    const wrongVector = [...input.probabilities];
+    const donor = wrongVector.findIndex((value) => value > 0);
+    const recipient = donor === 0 ? 1 : 0;
+    requireCondition(donor >= 0 && recipient < wrongVector.length, "vector drift fixture unavailable");
+    wrongVector[donor] -= 1;
+    wrongVector[recipient] += 1;
     const qualification = qualifyDecisionCertificate({
       certificate: input.certificate,
       policy: input.policy,
@@ -841,6 +1016,17 @@ function runAttackProbes(input: {
     tampered.certificateId = `decisioncert_${"0".repeat(20)}`;
     const errors = verifyDecisionCertificateMath(tampered, input.policy);
     push("rehashed_certificate_id", errors.length > 0, errors[0] ?? "accepted");
+  }
+
+  // Fully rehashed semantic certificate forgery.
+  {
+    const tampered = structuredClone(input.certificate);
+    tampered.actionId =
+      input.policy.actionIds.find((id) => id !== tampered.actionId) ?? input.policy.actionIds[0];
+    const { certificateId: _oldId, ...body } = tampered;
+    tampered.certificateId = contentId("decisioncert", body);
+    const errors = verifyDecisionCertificateMath(tampered, input.policy);
+    push("rehashed_semantic_certificate", errors.length > 0, errors[0] ?? "accepted");
   }
 
   // Authority smuggling on qualification.
@@ -899,6 +1085,45 @@ function runAttackProbes(input: {
       qualification: forged,
     });
     push("rehashed_qualification", consumer.disposition === "abstain", consumer.disposition);
+  }
+
+  // Fully rehashed semantic qualification forgery still cannot cause continuation.
+  {
+    const qualification = qualifyDecisionCertificate({
+      certificate: input.certificate,
+      policy: input.policy,
+      fullProbabilityVector: input.probabilities,
+    });
+    const forged = structuredClone(qualification);
+    forged.referenceDecisionMatched = false;
+    const { qualificationId: _oldId, ...body } = forged;
+    forged.qualificationId = contentId("keaqualification", body);
+    const consumer = consumeQualifiedDecision({
+      certificate: input.certificate,
+      policy: input.policy,
+      qualification: forged,
+    });
+    push(
+      "rehashed_semantic_qualification",
+      consumer.disposition === "abstain" && consumer.authorityGranted === false,
+      consumer.disposition
+    );
+  }
+
+  // Noncanonical qualification fields fail closed in the restricted consumer.
+  {
+    const qualification = qualifyDecisionCertificate({
+      certificate: input.certificate,
+      policy: input.policy,
+      fullProbabilityVector: input.probabilities,
+    });
+    const forged = { ...qualification, unexpectedField: true };
+    const consumer = consumeQualifiedDecision({
+      certificate: input.certificate,
+      policy: input.policy,
+      qualification: forged as KeaDecisionQualification,
+    });
+    push("unknown_qualification_field", consumer.disposition === "abstain", consumer.disposition);
   }
 
   // Altered probability mass on certificate revealed units without residual repair.
@@ -984,6 +1209,13 @@ function loadPredictionState(inputDir: string): {
     requireCondition(typeof row.caseId === "string" && row.caseId.length > 0, "vector caseId invalid");
     requireCondition(Array.isArray(row.probabilities), "vector probabilities missing");
     requireCondition(row.probabilities.length === labels.length, "vector length does not match labels");
+    requireCondition(row.sourceSplit === "test", "vector sourceSplit drifted");
+    requireCondition(Number.isSafeInteger(row.sourceIndex), "vector sourceIndex invalid");
+    requireCondition(typeof row.modelId === "string" && row.modelId.length > 0, "vector modelId invalid");
+    requireCondition(
+      Array.isArray(row.labelIds) && canonicalJson(row.labelIds) === canonicalJson(labels),
+      "vector labelIds drifted"
+    );
     requireCondition(row.textIncluded !== true, "source text must be excluded from prediction state");
     requireCondition(!("text" in row), "source text leaked into prediction state");
     requireCondition(!("sourceText" in row), "source text leaked into prediction state");
@@ -997,15 +1229,30 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
   const { labels, vectors: rawVectors, run, environment: inputEnvironment } = loadPredictionState(inputDir);
   const probabilityScale = config.probabilityScale;
   const labelIds = labels.map(wireLabel);
+  const runId = run.runId;
+  requireCondition(typeof runId === "string" && /^decisionrun_[a-f0-9]{20}$/.test(runId), "runId invalid");
+  const { runId: _ignoredRunId, ...runBody } = run;
+  requireCondition(runId === contentId("decisionrun", runBody), "runId does not match run content");
+  const runnerVectorArtifact = run.vectorArtifact as { rows?: number; sha256?: string } | undefined;
+  requireCondition(runnerVectorArtifact?.rows === rawVectors.length, "runner vector row count drifted");
+  requireCondition(
+    runnerVectorArtifact?.sha256 === sha256(readFileSync(join(inputDir, "vectors.jsonl"))),
+    "runner vector digest drifted"
+  );
+  const continuity = classifierContinuity(rawVectors, labels, config.continuityReference);
 
-  // Evaluation inventory vectors are content-addressed probability state only.
-  // Runner-only metadata (trueIntent, sourceIndex, modelId, labelIds) is not re-emitted.
+  // Preserve the runner's text-free vector rows exactly so run.json continues to bind them.
   const vectors: Array<{
     schemaVersion: typeof VECTOR_SCHEMA;
     caseId: string;
     vectorId: string;
     probabilityScale: number;
     probabilities: number[];
+    trueIntent: string;
+    sourceSplit: string;
+    sourceIndex: number;
+    modelId: string;
+    labelIds: string[];
     textIncluded: false;
   }> = rawVectors.map((row) => {
     const sum = row.probabilities.reduce((total, value) => total + value, 0);
@@ -1020,6 +1267,14 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
       vectorId: observedId,
       probabilityScale,
       probabilities: row.probabilities,
+      trueIntent: (() => {
+        requireCondition(typeof row.trueIntent === "string", `trueIntent missing for ${row.caseId}`);
+        return row.trueIntent;
+      })(),
+      sourceSplit: String(row.sourceSplit),
+      sourceIndex: Number(row.sourceIndex),
+      modelId: String(row.modelId),
+      labelIds: [...(row.labelIds as string[])],
       textIncluded: false as const,
     };
   });
@@ -1085,16 +1340,21 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
       policyId: record.policyId,
       textIncluded: false as const,
       certificate: record.adaptive.certificate,
+      qualification: record.qualification,
+      restricted: record.restricted,
+      authorityGranted: false as const,
     };
   });
 
-  // Secondary quantities required by PROTOCOL (measured, not stored in the frozen inventory).
+  // Secondary quantities required by PROTOCOL are committed below, not left on stdout only.
   const certificateBytes = records.map((record) => record.bytes.certificate);
   const fullVectorBytes = records.map((record) => record.bytes.fullVector);
+  const expectedCostSummaryBytes = records.map((record) => record.bytes.expectedCostSummary);
   const qualificationBytes = records.map((record) => record.bytes.qualification);
   const wagglePacketBytes = records.map((record) => record.bytes.wagglePacket);
   const waggleMessageBytes = records.map((record) => record.bytes.waggleMessageEnvelope);
   const ledgerBytes = records.map((record) => record.bytes.ledger);
+  const revealedCounts = records.map((record) => record.adaptive.certificate.revealed.length);
   const perK = perKCoverage(vectors, policies, probabilityScale, config.maxRevealedProbabilities);
   const perPolicy = perPolicyCoverage(records, policySeeds);
   const refusalCounts = {
@@ -1141,6 +1401,8 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     safeK1Coverage: metricsCore.safeK1Coverage,
     adaptiveDecisionMismatches: metricsCore.adaptiveDecisionMismatches,
     fullVectorDecisionMismatches: metricsCore.fullVectorDecisionMismatches,
+    expectedCostSummaryDecisionMismatches:
+      metricsCore.expectedCostSummaryDecisionMismatches,
     naiveTop1DecisionMismatches: metricsCore.naiveTop1DecisionMismatches,
     noStateContinues: metricsCore.noStateContinues,
     attacksRejected: attacks.allSpecifiedTampersRejected && attacks.falseAccepts === 0,
@@ -1164,9 +1426,40 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
       safeK3Coverage: metricsCore.safeK3Coverage,
       adaptiveDecisionMismatches: metricsCore.adaptiveDecisionMismatches,
       fullVectorDecisionMismatches: metricsCore.fullVectorDecisionMismatches,
+      expectedCostSummaryDecisionMismatches:
+        metricsCore.expectedCostSummaryDecisionMismatches,
       naiveTop1DecisionMismatches: metricsCore.naiveTop1DecisionMismatches,
       noStateContinues: metricsCore.noStateContinues,
+      fullVectorNonTiedDenominator: metricsCore.fullVectorNonTiedDenominator,
+      adaptiveSafeContinues: metricsCore.adaptiveSafeContinues,
+      safeK1Continues: metricsCore.safeK1Continues,
+      safeK3Continues: metricsCore.safeK3Continues,
+      adaptiveCoverageGainOverSafeK1: metricsCore.adaptiveCoverageGainOverSafeK1,
     },
+    bootstrap,
+    perK,
+    perPolicy,
+    refusals: refusalCounts,
+    parity,
+    revealedComponents: summarizeIntegers(revealedCounts),
+    classifierContinuity: continuity,
+    bytes: {
+      unit: "canonical UTF-8 bytes; not tokens, cost, memory, energy, or total resources",
+      fullVector: summarizeIntegers(fullVectorBytes),
+      certificate: summarizeIntegers(certificateBytes),
+      expectedCostSummary: summarizeIntegers(expectedCostSummaryBytes),
+      qualification: summarizeIntegers(qualificationBytes),
+      wagglePacket: summarizeIntegers(wagglePacketBytes),
+      waggleMessageEnvelope: summarizeIntegers(waggleMessageBytes),
+      ledger: summarizeIntegers(ledgerBytes),
+    },
+    nonClaims: [
+      "The result is a preregistered prospective secondary analysis, not an independent model replication.",
+      "A first certifying top-probability prefix is not a globally minimum message.",
+      "The expected-cost summary is an equally informed compact control and may be smaller.",
+      "Bytes are not tokens, credits, cost, memory, energy, or overall efficiency.",
+      "No privacy, security against a permitted malicious writer, production, or authority is established.",
+    ],
     primaryGates: primary.gates,
     scientificVerdict: primary.scientificVerdict,
     effects,
@@ -1175,6 +1468,12 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
   const environment = {
     schemaVersion: ENVIRONMENT_SCHEMA,
     status: "preregistered-prospective-secondary-analysis",
+    runner: inputEnvironment,
+    evaluator: {
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+    },
     providerApiCalls: 0,
     modelApiCalls: 0,
     authorityEffectsExecuted: 0,
@@ -1187,7 +1486,7 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     policies,
   };
 
-  // Decision rows omit internal helper fields (policySeed, bytes) from the published schema surface.
+  // Full certificate rows are gzip-compressed deterministically; readable samples remain separate.
   const decisionRows = records.map((record) => ({
     schemaVersion: record.schemaVersion,
     caseId: record.caseId,
@@ -1195,6 +1494,8 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     vectorId: record.vectorId,
     authorityGranted: false as const,
     fullVector: record.fullVector,
+    fullVectorReconstruction: record.fullVectorReconstruction,
+    expectedCostSummary: record.expectedCostSummary,
     adaptive: record.adaptive,
     safeK1: record.safeK1,
     safeK3: record.safeK3,
@@ -1202,6 +1503,7 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     noState: record.noState,
     qualification: {
       disposition: record.qualification.disposition,
+      qualificationId: record.qualification.qualificationId,
       authorityGranted: false as const,
     },
     restricted: {
@@ -1209,15 +1511,21 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
       actionId: record.restricted.actionId,
       authorityGranted: false as const,
     },
+    bytes: record.bytes,
   }));
 
   mkdirSync(outputDir, { recursive: true, mode: 0o755 });
   writeCanonicalJson(join(outputDir, "environment.json"), environment);
+  writeCanonicalJson(join(outputDir, "run.json"), run);
   writeCanonicalJson(join(outputDir, "policies.json"), policiesArtifact);
   writeCanonicalJson(join(outputDir, "evaluation.json"), evaluation);
   writeCanonicalJson(join(outputDir, "attacks.json"), attacks);
   writeJsonl(join(outputDir, "vectors.jsonl"), vectors);
-  writeJsonl(join(outputDir, "decisions.jsonl"), decisionRows);
+  const decisionPayload = Buffer.from(
+    `${decisionRows.map((row) => canonicalJson(row)).join("\n")}\n`,
+    "utf8"
+  );
+  writeFileSync(join(outputDir, "decisions.jsonl.gz"), gzipSync(decisionPayload, { level: 9 }));
   writeJsonl(join(outputDir, "samples.jsonl"), samples);
 
   const checksumLines = [...REQUIRED_ARTIFACTS]
@@ -1225,8 +1533,6 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     .map((name) => `${sha256(readFileSync(join(outputDir, name)))}  ${name}`);
   writeFileSync(join(outputDir, "SHA256SUMS"), `${checksumLines.join("\n")}\n`, "utf8");
 
-  // Secondary PROTOCOL quantities are measured and reported on stdout only so the
-  // frozen seven-artifact inventory stays independently re-verifiable.
   console.log(
     JSON.stringify({
       ok: true,
@@ -1242,39 +1548,7 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
       perPolicy,
       refusals: refusalCounts,
       parity,
-      bytes: {
-        unit: "canonical UTF-8 bytes; not tokens, cost, memory, energy, or total resources",
-        fullVector: {
-          median: median(fullVectorBytes),
-          p95: percentile(fullVectorBytes, 0.95),
-          total: fullVectorBytes.reduce((sum, value) => sum + value, 0),
-        },
-        certificate: {
-          median: median(certificateBytes),
-          p95: percentile(certificateBytes, 0.95),
-          total: certificateBytes.reduce((sum, value) => sum + value, 0),
-        },
-        qualification: {
-          median: median(qualificationBytes),
-          p95: percentile(qualificationBytes, 0.95),
-          total: qualificationBytes.reduce((sum, value) => sum + value, 0),
-        },
-        wagglePacket: {
-          median: median(wagglePacketBytes),
-          p95: percentile(wagglePacketBytes, 0.95),
-          total: wagglePacketBytes.reduce((sum, value) => sum + value, 0),
-        },
-        waggleMessageEnvelope: {
-          median: median(waggleMessageBytes),
-          p95: percentile(waggleMessageBytes, 0.95),
-          total: waggleMessageBytes.reduce((sum, value) => sum + value, 0),
-        },
-        ledger: {
-          median: median(ledgerBytes),
-          p95: percentile(ledgerBytes, 0.95),
-          total: ledgerBytes.reduce((sum, value) => sum + value, 0),
-        },
-      },
+      bytes: evaluation.bytes,
       effects,
       attacksRejected: attacks.allSpecifiedTampersRejected,
       inputEnvironmentPresent: inputEnvironment !== null,
@@ -1390,6 +1664,16 @@ function runSelfTest(config: DecisionSufficiencyConfig): void {
     continuationRecord.restricted.authorityGranted === false,
     "consumer authority must be false"
   );
+  requireCondition(
+    continuationRecord.fullVectorReconstruction.vectorId === continuationRecord.vectorId &&
+      continuationRecord.fullVectorReconstruction.actionId === continuationRecord.fullVector.actionId,
+    "canonical full-vector round trip failed"
+  );
+  requireCondition(
+    continuationRecord.expectedCostSummary.actionId === continuationRecord.fullVector.actionId &&
+      continuationRecord.expectedCostSummary.authorityGranted === false,
+    "expected-cost summary parity failed"
+  );
 
   // 2) Insufficient-confidence refusal (unresolved residual interval).
   const refusalVector = [300_000, 200_000, 300_000, 200_000];
@@ -1447,6 +1731,7 @@ function runSelfTest(config: DecisionSufficiencyConfig): void {
   requireCondition(continuationRecord.bytes.certificate > 0, "certificate bytes");
   requireCondition(continuationRecord.bytes.fullVector > 0, "full-vector bytes");
   requireCondition(continuationRecord.bytes.qualification > 0, "qualification bytes");
+  requireCondition(continuationRecord.bytes.expectedCostSummary > 0, "expected-cost-summary bytes");
   requireCondition(continuationRecord.bytes.wagglePacket > 0, "waggle packet bytes");
   requireCondition(continuationRecord.bytes.ledger > 0, "ledger bytes");
 
@@ -1466,6 +1751,7 @@ function runSelfTest(config: DecisionSufficiencyConfig): void {
     safeK1Coverage: 0.8,
     adaptiveDecisionMismatches: 0,
     fullVectorDecisionMismatches: 0,
+    expectedCostSummaryDecisionMismatches: 0,
     naiveTop1DecisionMismatches: 1,
     noStateContinues: 0,
     attacksRejected: true,
@@ -1483,6 +1769,7 @@ function runSelfTest(config: DecisionSufficiencyConfig): void {
     safeK1Coverage: 0.5,
     adaptiveDecisionMismatches: 0,
     fullVectorDecisionMismatches: 0,
+    expectedCostSummaryDecisionMismatches: 0,
     naiveTop1DecisionMismatches: 1,
     noStateContinues: 0,
     attacksRejected: true,
@@ -1522,6 +1809,14 @@ function main(): void {
   requireCondition(
     config.policyFamily.type === "sha256-partitioned-four-action-zero-one-cost",
     "policy family type drift"
+  );
+  requireCondition(
+    config.primaryAdmission.expectedCostSummaryDecisionMismatchesMaximum === 0,
+    "expected-cost-summary gate drift"
+  );
+  requireCondition(
+    config.continuityReference.maximumAbsoluteDrift === 1e-12,
+    "classifier continuity policy drift"
   );
 
   if (args.selfTest) {

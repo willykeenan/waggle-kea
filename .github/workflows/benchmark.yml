@@ -27,4 +27,5 @@ jobs:
           cache-dependency-path: benchmarks/banking77/requirements.lock
       - run: npm ci
       - run: npm run benchmark:banking77
+      - run: npm run benchmark:decision-sufficiency
       - run: git diff --exit-code

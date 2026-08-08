@@ -30,6 +30,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CONFIG_PATH = resolve(repoRoot, "benchmarks/decision-sufficiency/config.v1.json");
@@ -43,6 +44,8 @@ const ATTACKS_SCHEMA = "waggle.decision-sufficiency.attacks.v1";
 const VECTOR_SCHEMA = "waggle.decision-sufficiency.vector.v1";
 const DECISION_ROW_SCHEMA = "waggle.decision-sufficiency.decision.v1";
 const SAMPLE_SCHEMA = "waggle.decision-sufficiency.sample.v1";
+const FULL_VECTOR_STATE_SCHEMA = "waggle.decision-sufficiency.full-vector.v1";
+const COST_SUMMARY_SCHEMA = "waggle.decision-sufficiency.cost-summary.v1";
 
 const SYMBOLIC_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,159}$/;
 const MAX_LABELS = 1_024;
@@ -51,10 +54,11 @@ const MAX_COST_UNITS = 1_000_000;
 
 const REQUIRED_ARTIFACTS = [
   "attacks.json",
-  "decisions.jsonl",
+  "decisions.jsonl.gz",
   "environment.json",
   "evaluation.json",
   "policies.json",
+  "run.json",
   "samples.jsonl",
   "vectors.jsonl",
 ];
@@ -189,6 +193,10 @@ function loadFrozenConfig() {
     "fullVectorDecisionMismatchesMaximum drifted"
   );
   requireCondition(
+    admission.expectedCostSummaryDecisionMismatchesMaximum === 0,
+    "expectedCostSummaryDecisionMismatchesMaximum drifted"
+  );
+  requireCondition(
     admission.naiveTop1DecisionMismatchesMinimum === 1,
     "naiveTop1DecisionMismatchesMinimum drifted"
   );
@@ -200,6 +208,12 @@ function loadFrozenConfig() {
     "bootstrap contract drifted"
   );
   requireCondition(config.canonicalSeed === 20260805, "canonicalSeed drifted");
+  requireCondition(
+    config.continuityReference?.accuracy === 0.9114754098360656 &&
+      config.continuityReference?.macroF1 === 0.9118581227515896 &&
+      config.continuityReference?.maximumAbsoluteDrift === 1e-12,
+    "continuity reference drifted"
+  );
   return config;
 }
 
@@ -605,6 +619,156 @@ function naiveTop1Action(probabilities, policy) {
   };
 }
 
+function canonicalFullVectorState(vector) {
+  return {
+    schemaVersion: FULL_VECTOR_STATE_SCHEMA,
+    vectorId: vector.vectorId,
+    probabilityScale: vector.probabilityScale,
+    probabilities: [...vector.probabilities],
+  };
+}
+
+function createExpectedCostSummary(caseId, vectorId, policy, reference) {
+  const body = {
+    schemaVersion: COST_SUMMARY_SCHEMA,
+    caseId,
+    policyId: policy.policyId,
+    vectorId,
+    actionCostUnits: [...reference.actionCostUnits],
+    disposition: reference.disposition,
+    actionId: reference.actionId,
+    authorityGranted: false,
+  };
+  return { ...body, summaryId: contentId("decisioncostsummary", body) };
+}
+
+function qualificationForCertificate(certificate) {
+  const body = {
+    schemaVersion: "kea.decision-qualification.v1",
+    certificateId: certificate.certificateId,
+    policyId: certificate.policyId,
+    vectorId: certificate.vectorId,
+    disposition: certificate.disposition === "continue" ? "qualified" : "abstained",
+    sourceVectorVerified: true,
+    certificateMathVerified: true,
+    referenceDecisionMatched: true,
+    errors: [],
+    authorityGranted: false,
+  };
+  return { ...body, qualificationId: contentId("keaqualification", body) };
+}
+
+function certificatePacket(certificate) {
+  return {
+    protocol: "waggle.v0",
+    messageClass: "artifact-handoff",
+    intent: "handoff",
+    operation: "decision.certificate.handoff",
+    references: {
+      context: [certificate.caseId],
+      artifacts: [certificate.certificateId],
+      evidence: [certificate.vectorId],
+    },
+    delta: {
+      certificateId: certificate.certificateId,
+      policyId: certificate.policyId,
+      vectorId: certificate.vectorId,
+      disposition: certificate.disposition,
+      actionId: certificate.actionId,
+      revealed: certificate.revealed,
+      residualUnits: certificate.residualUnits,
+      pairwiseLowerAdvantages: certificate.pairwiseLowerAdvantages,
+      authorityGranted: false,
+    },
+  };
+}
+
+function measureTransportBytes(certificate, qualification, vector, costSummary) {
+  const packet = certificatePacket(certificate);
+  const createdAt = "2026-08-05T00:00:00.000Z";
+  const core = {
+    missionId: "mission_decision_sufficiency",
+    workNodeId: `work_${certificate.caseId}`,
+    senderAgentId: "agent_decision_producer",
+    packet,
+    createdAt,
+  };
+  const messageId = contentId("wagglemsg", core);
+  const message = {
+    messageId,
+    missionId: core.missionId,
+    workNodeId: core.workNodeId,
+    senderAgentId: core.senderAgentId,
+    receiverActorIds: ["agent_restricted_consumer"],
+    messageClass: packet.messageClass,
+    causalParentIds: [],
+    contextPackId: certificate.caseId,
+    artifactRefs: [certificate.certificateId],
+    evidenceRefs: [certificate.vectorId],
+    codec: {
+      languageId: "waggle",
+      languageVersion: "0.1.0",
+      codecId: "waggle.v0.canonical-json",
+      codecVersion: "0.1.0",
+      compatibilityDomain: "waggle-v0-tools",
+      transport: "mission-delta",
+    },
+    payload: packet,
+    payloadHash: hashCanonical(packet),
+    payloadBytes: Buffer.byteLength(canonicalJson(packet), "utf8"),
+    sensitivity: "public",
+    authorityEffect: "none",
+    idempotencyKey: contentId("waggleidem", core),
+    createdAt,
+    fixture: true,
+  };
+  const interpretation = {
+    interpretationId: contentId("keainterp", {
+      certificateId: certificate.certificateId,
+      qualificationId: qualification.qualificationId,
+    }),
+    messageId,
+    disposition: qualification.disposition === "qualified" ? "verified" : "rejected",
+    humanGloss: "decision-certificate-qualification",
+    proposedMissionDelta: packet.delta,
+    verification: {
+      exactRoundTrip: true,
+      decoderBehavioralParity: "not-evaluated",
+      policyParity: "not-evaluated",
+    },
+    budget: { maxUndecodableBytes: 0, usedUndecodableBytes: 0, exceeded: false },
+    watchSignals: [],
+    authorityGranted: false,
+    createdAt,
+  };
+  const eventCore = {
+    schemaVersion: "1.0.0",
+    sequence: 1,
+    eventId: contentId("keaevt", {
+      sequence: 1,
+      kind: "interpretation",
+      messageId,
+      at: createdAt,
+      data: interpretation,
+    }),
+    kind: "interpretation",
+    messageId,
+    at: createdAt,
+    previousHash: "GENESIS",
+    data: interpretation,
+  };
+  const ledger = [{ ...eventCore, eventHash: hashCanonical(eventCore) }];
+  return {
+    fullVector: Buffer.byteLength(canonicalJson(canonicalFullVectorState(vector)), "utf8"),
+    certificate: Buffer.byteLength(canonicalJson(certificate), "utf8"),
+    qualification: Buffer.byteLength(canonicalJson(qualification), "utf8"),
+    wagglePacket: Buffer.byteLength(canonicalJson(packet), "utf8"),
+    waggleMessageEnvelope: Buffer.byteLength(canonicalJson(message), "utf8"),
+    ledger: Buffer.byteLength(canonicalJson(ledger), "utf8"),
+    expectedCostSummary: Buffer.byteLength(canonicalJson(costSummary), "utf8"),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Primary admission recomputation
 // ---------------------------------------------------------------------------
@@ -620,6 +784,9 @@ function recomputePrimaryVerdict(metrics, admission) {
       metrics.adaptiveDecisionMismatches <= admission.adaptiveDecisionMismatchesMaximum,
     fullVectorDecisionMismatches:
       metrics.fullVectorDecisionMismatches <= admission.fullVectorDecisionMismatchesMaximum,
+    expectedCostSummaryDecisionMismatches:
+      metrics.expectedCostSummaryDecisionMismatches <=
+      admission.expectedCostSummaryDecisionMismatchesMaximum,
     naiveTop1DecisionMismatches:
       metrics.naiveTop1DecisionMismatches >= admission.naiveTop1DecisionMismatchesMinimum,
     noStateContinues: metrics.noStateContinues <= admission.noStateContinuesMaximum,
@@ -636,6 +803,134 @@ function recomputePrimaryVerdict(metrics, admission) {
   };
 }
 
+function mulberry32(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function percentile(values, fraction) {
+  requireCondition(values.length > 0, "cannot take percentile of empty series");
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor(fraction * sorted.length)));
+  return sorted[index];
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function summarizeIntegers(values) {
+  requireCondition(values.length > 0, "cannot summarize empty series");
+  return {
+    minimum: Math.min(...values),
+    median: median(values),
+    p95: percentile(values, 0.95),
+    maximum: Math.max(...values),
+    total: values.reduce((sum, value) => sum + value, 0),
+  };
+}
+
+function aggregateStored(records) {
+  let denominator = 0;
+  let adaptive = 0;
+  let k1 = 0;
+  let k3 = 0;
+  for (const row of records) {
+    if (row.fullVector.disposition !== "continue") continue;
+    denominator += 1;
+    if (row.adaptive.certificate.disposition === "continue") adaptive += 1;
+    if (row.safeK1.certificate.disposition === "continue") k1 += 1;
+    if (row.safeK3.certificate.disposition === "continue") k3 += 1;
+  }
+  return {
+    denominator,
+    adaptive,
+    k1,
+    k3,
+    adaptiveSafeCoverage: denominator === 0 ? 0 : adaptive / denominator,
+    safeK1Coverage: denominator === 0 ? 0 : k1 / denominator,
+    safeK3Coverage: denominator === 0 ? 0 : k3 / denominator,
+  };
+}
+
+function caseClusteredBootstrap(records, seed, draws) {
+  const byCase = new Map();
+  for (const row of records) {
+    const list = byCase.get(row.caseId) ?? [];
+    list.push(row);
+    byCase.set(row.caseId, list);
+  }
+  const caseIds = [...byCase.keys()].sort();
+  const rng = mulberry32(seed);
+  const coverages = [];
+  const gains = [];
+  for (let draw = 0; draw < draws; draw += 1) {
+    const sampled = [];
+    for (let index = 0; index < caseIds.length; index += 1) {
+      sampled.push(...byCase.get(caseIds[Math.floor(rng() * caseIds.length)]));
+    }
+    const metrics = aggregateStored(sampled);
+    coverages.push(metrics.adaptiveSafeCoverage);
+    gains.push(metrics.adaptiveSafeCoverage - metrics.safeK1Coverage);
+  }
+  return {
+    method: "case-clustered-percentile",
+    seed,
+    draws,
+    adaptiveSafeCoverageInterval95: [percentile(coverages, 0.025), percentile(coverages, 0.975)],
+    adaptiveCoverageGainOverSafeK1Interval95: [percentile(gains, 0.025), percentile(gains, 0.975)],
+  };
+}
+
+function classifierContinuity(vectors, labelIds, reference) {
+  const byLabel = new Map(labelIds.map((label) => [label, { tp: 0, fp: 0, fn: 0 }]));
+  let correct = 0;
+  for (const vector of vectors) {
+    requireCondition(typeof vector.trueIntent === "string", `trueIntent missing for ${vector.caseId}`);
+    requireCondition(byLabel.has(vector.trueIntent), `unknown trueIntent for ${vector.caseId}`);
+    let predictedIndex = 0;
+    for (let index = 1; index < vector.probabilities.length; index += 1) {
+      if (vector.probabilities[index] > vector.probabilities[predictedIndex]) predictedIndex = index;
+    }
+    const predicted = labelIds[predictedIndex];
+    if (predicted === vector.trueIntent) {
+      correct += 1;
+      byLabel.get(predicted).tp += 1;
+    } else {
+      byLabel.get(predicted).fp += 1;
+      byLabel.get(vector.trueIntent).fn += 1;
+    }
+  }
+  const accuracy = correct / vectors.length;
+  const macroF1 =
+    [...byLabel.values()].reduce((sum, value) => {
+      const denominator = 2 * value.tp + value.fp + value.fn;
+      return sum + (denominator === 0 ? 0 : (2 * value.tp) / denominator);
+    }, 0) / labelIds.length;
+  const accuracyAbsoluteDrift = Math.abs(accuracy - reference.accuracy);
+  const macroF1AbsoluteDrift = Math.abs(macroF1 - reference.macroF1);
+  return {
+    quantizedVectorAccuracy: accuracy,
+    quantizedVectorMacroF1: macroF1,
+    publishedV02Accuracy: reference.accuracy,
+    publishedV02MacroF1: reference.macroF1,
+    maximumAbsoluteDrift: reference.maximumAbsoluteDrift,
+    accuracyAbsoluteDrift,
+    macroF1AbsoluteDrift,
+    continuityPassed:
+      accuracyAbsoluteDrift <= reference.maximumAbsoluteDrift &&
+      macroF1AbsoluteDrift <= reference.maximumAbsoluteDrift,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Artifact I/O and inventory
 // ---------------------------------------------------------------------------
@@ -649,6 +944,18 @@ function parseJsonl(text, name) {
       fail(`${name} line ${index + 1} is not valid JSON`);
     }
   });
+}
+
+function parseGzipJsonl(path, name) {
+  requireCondition(existsSync(path), `missing ${name}`);
+  requireCondition(!lstatSync(path).isSymbolicLink(), `${name} must not be a symlink`);
+  let text;
+  try {
+    text = gunzipSync(readFileSync(path)).toString("utf8");
+  } catch (error) {
+    fail(`${name} is not valid gzip: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return parseJsonl(text, name);
 }
 
 function readJson(dir, name) {
@@ -798,15 +1105,17 @@ function verifyResultsDirectory(resultsDir, config) {
   assertChecksums(dir);
 
   const environment = readJson(dir, "environment.json");
+  const run = readJson(dir, "run.json");
   const policiesArtifact = readJson(dir, "policies.json");
   const evaluation = readJson(dir, "evaluation.json");
   const attacks = readJson(dir, "attacks.json");
   const vectors = parseJsonl(readText(dir, "vectors.jsonl"), "vectors.jsonl");
-  const decisions = parseJsonl(readText(dir, "decisions.jsonl"), "decisions.jsonl");
+  const decisions = parseGzipJsonl(resolve(dir, "decisions.jsonl.gz"), "decisions.jsonl.gz");
   const samples = parseJsonl(readText(dir, "samples.jsonl"), "samples.jsonl");
 
   for (const [name, value] of [
     ["environment.json", environment],
+    ["run.json", run],
     ["policies.json", policiesArtifact],
     ["evaluation.json", evaluation],
     ["attacks.json", attacks],
@@ -837,6 +1146,8 @@ function verifyResultsDirectory(resultsDir, config) {
       "schemaVersion",
       "scoredPhaseNetworkCalls",
       "status",
+      "runner",
+      "evaluator",
     ],
     "environment.json"
   );
@@ -854,6 +1165,32 @@ function verifyResultsDirectory(resultsDir, config) {
   requireCondition(
     environment.scoredPhaseNetworkCalls === 0,
     "scored-phase network calls must be zero"
+  );
+  requireCondition(
+    environment.runner !== null && typeof environment.runner === "object",
+    "runner environment missing"
+  );
+  requireExactKeys(environment.evaluator, ["arch", "node", "platform"], "environment.evaluator");
+  requireCondition(typeof environment.evaluator.node === "string", "evaluator node missing");
+
+  requireCondition(
+    run !== null && typeof run === "object" && !Array.isArray(run),
+    "run.json must be an object"
+  );
+  requireCondition(/^decisionrun_[a-f0-9]{20}$/.test(run.runId), "runId invalid");
+  const { runId: observedRunId, ...runBody } = run;
+  requireCondition(
+    observedRunId === contentId("decisionrun", runBody),
+    "runId does not match run content"
+  );
+  requireCondition(run.resources?.trainingRuns === 1, "run training count drifted");
+  requireCondition(run.resources?.scoredCases === vectors.length, "run scored-case count drifted");
+  requireCondition(run.resources?.vectorComponents === 77, "run vector component count drifted");
+  requireCondition(!("cachePath" in (run.resources ?? {})), "run leaks cachePath");
+  requireCondition(!("outputPath" in (run.resources ?? {})), "run leaks outputPath");
+  requireCondition(
+    run.vectorArtifact?.sha256 === sha256Hex(readFileSync(resolve(dir, "vectors.jsonl"))),
+    "run vector digest drifted"
   );
 
   // Policies
@@ -945,6 +1282,7 @@ function verifyResultsDirectory(resultsDir, config) {
   let safeK3Continues = 0;
   let adaptiveDecisionMismatches = 0;
   let fullVectorDecisionMismatches = 0;
+  let expectedCostSummaryDecisionMismatches = 0;
   let naiveTop1DecisionMismatches = 0;
   let noStateContinues = 0;
   let authorityGrants = 0;
@@ -956,8 +1294,11 @@ function verifyResultsDirectory(resultsDir, config) {
       [
         "adaptive",
         "authorityGranted",
+        "bytes",
         "caseId",
+        "expectedCostSummary",
         "fullVector",
+        "fullVectorReconstruction",
         "naiveTop1",
         "noState",
         "policyId",
@@ -1019,6 +1360,47 @@ function verifyResultsDirectory(resultsDir, config) {
         row.fullVector.actionId === reference.actionId,
       `full-vector decision mismatch for ${row.caseId}/${row.policyId}`
     );
+    const fullState = canonicalFullVectorState(vector);
+    const decodedFullState = JSON.parse(canonicalJson(fullState));
+    const reconstructedVectorId = decisionVectorId(
+      decodedFullState.probabilities,
+      decodedFullState.probabilityScale
+    );
+    const reconstructed = referenceDecision(
+      decodedFullState.probabilities,
+      decodedFullState.probabilityScale,
+      policy
+    );
+    requireExactKeys(
+      row.fullVectorReconstruction,
+      ["actionId", "disposition", "encoding", "vectorId"],
+      `fullVectorReconstruction ${row.caseId}/${row.policyId}`
+    );
+    requireCondition(
+      row.fullVectorReconstruction.encoding === "canonical-json" &&
+        row.fullVectorReconstruction.vectorId === reconstructedVectorId &&
+        row.fullVectorReconstruction.disposition === reconstructed.disposition &&
+        row.fullVectorReconstruction.actionId === reconstructed.actionId,
+      `full-vector reconstruction drift for ${row.caseId}/${row.policyId}`
+    );
+    if (
+      reconstructedVectorId !== vector.vectorId ||
+      reconstructed.disposition !== reference.disposition ||
+      reconstructed.actionId !== reference.actionId
+    ) {
+      fullVectorDecisionMismatches += 1;
+    }
+    const costSummary = createExpectedCostSummary(row.caseId, vector.vectorId, policy, reference);
+    requireCondition(
+      canonicalJson(row.expectedCostSummary) === canonicalJson(costSummary),
+      `expected-cost summary drift for ${row.caseId}/${row.policyId}`
+    );
+    if (
+      costSummary.disposition !== reference.disposition ||
+      costSummary.actionId !== reference.actionId
+    ) {
+      expectedCostSummaryDecisionMismatches += 1;
+    }
 
     requireCondition(
       row.adaptive?.certificate?.authorityGranted === false,
@@ -1103,7 +1485,7 @@ function verifyResultsDirectory(resultsDir, config) {
     // certificate, never grant authority, and never invent a continue action.
     requireExactKeys(
       row.qualification,
-      ["authorityGranted", "disposition"],
+      ["authorityGranted", "disposition", "qualificationId"],
       `decision qualification ${row.caseId}/${row.policyId}`
     );
     requireCondition(row.qualification.authorityGranted === false, "qualification grants authority");
@@ -1116,6 +1498,11 @@ function verifyResultsDirectory(resultsDir, config) {
     requireCondition(
       row.qualification.disposition === expectedQualificationDisposition,
       `qualification disposition drift for ${row.caseId}/${row.policyId}: observed ${row.qualification.disposition} expected ${expectedQualificationDisposition}`
+    );
+    const expectedQualification = qualificationForCertificate(adaptive);
+    requireCondition(
+      row.qualification.qualificationId === expectedQualification.qualificationId,
+      `qualification id drift for ${row.caseId}/${row.policyId}`
     );
 
     requireExactKeys(
@@ -1144,6 +1531,30 @@ function verifyResultsDirectory(resultsDir, config) {
         `restricted must not emit an action when adaptive is unresolved for ${row.caseId}/${row.policyId}`
       );
     }
+
+    const expectedBytes = measureTransportBytes(
+      adaptive,
+      expectedQualification,
+      vector,
+      costSummary
+    );
+    requireExactKeys(
+      row.bytes,
+      [
+        "certificate",
+        "expectedCostSummary",
+        "fullVector",
+        "ledger",
+        "qualification",
+        "waggleMessageEnvelope",
+        "wagglePacket",
+      ],
+      `decision bytes ${row.caseId}/${row.policyId}`
+    );
+    requireCondition(
+      canonicalJson(row.bytes) === canonicalJson(expectedBytes),
+      `byte accounting drift for ${row.caseId}/${row.policyId}`
+    );
   }
 
   requireCondition(
@@ -1161,11 +1572,20 @@ function verifyResultsDirectory(resultsDir, config) {
     evaluation,
     [
       "authorityGranted",
+      "bootstrap",
+      "bytes",
       "caseCount",
+      "classifierContinuity",
       "decisionCount",
       "effects",
       "metrics",
+      "nonClaims",
+      "parity",
+      "perK",
+      "perPolicy",
       "primaryGates",
+      "refusals",
+      "revealedComponents",
       "sampleCount",
       "schemaVersion",
       "scientificVerdict",
@@ -1192,12 +1612,18 @@ function verifyResultsDirectory(resultsDir, config) {
     evaluation.metrics,
     [
       "adaptiveDecisionMismatches",
+      "adaptiveCoverageGainOverSafeK1",
+      "adaptiveSafeContinues",
       "adaptiveSafeCoverage",
+      "expectedCostSummaryDecisionMismatches",
+      "fullVectorNonTiedDenominator",
       "fullVectorDecisionMismatches",
       "naiveTop1DecisionMismatches",
       "noStateContinues",
       "safeK1Coverage",
+      "safeK1Continues",
       "safeK3Coverage",
+      "safeK3Continues",
     ],
     "evaluation.metrics"
   );
@@ -1227,12 +1653,173 @@ function verifyResultsDirectory(resultsDir, config) {
     "fullVectorDecisionMismatches mismatch"
   );
   requireCondition(
+    evaluation.metrics.expectedCostSummaryDecisionMismatches ===
+      expectedCostSummaryDecisionMismatches,
+    "expectedCostSummaryDecisionMismatches mismatch"
+  );
+  requireCondition(
     evaluation.metrics.naiveTop1DecisionMismatches === naiveTop1DecisionMismatches,
     "naiveTop1DecisionMismatches mismatch"
   );
   requireCondition(
     evaluation.metrics.noStateContinues === noStateContinues,
     "noStateContinues mismatch"
+  );
+  requireCondition(
+    evaluation.metrics.fullVectorNonTiedDenominator === fullVectorNonTied &&
+      evaluation.metrics.adaptiveSafeContinues === adaptiveSafeContinues &&
+      evaluation.metrics.safeK1Continues === safeK1Continues &&
+      evaluation.metrics.safeK3Continues === safeK3Continues,
+    "stored decision denominators drifted"
+  );
+  requireCondition(
+    Math.abs(
+      evaluation.metrics.adaptiveCoverageGainOverSafeK1 -
+        (adaptiveSafeCoverage - safeK1Coverage)
+    ) < 1e-12,
+    "adaptiveCoverageGainOverSafeK1 mismatch"
+  );
+
+  const recomputedBootstrap = caseClusteredBootstrap(
+    decisions,
+    config.bootstrap.seed,
+    config.bootstrap.draws
+  );
+  requireCondition(
+    canonicalJson(evaluation.bootstrap) === canonicalJson(recomputedBootstrap),
+    "bootstrap evidence drifted"
+  );
+  const recomputedPerK = [];
+  for (let k = 1; k <= config.maxRevealedProbabilities; k += 1) {
+    let continues = 0;
+    let denominator = 0;
+    for (const vector of vectors) {
+      for (const policy of policiesArtifact.policies) {
+        const reference = referenceDecision(vector.probabilities, config.probabilityScale, policy);
+        if (reference.disposition !== "continue") continue;
+        denominator += 1;
+        const certificate = createDecisionCertificate({
+          caseId: vector.caseId,
+          probabilities: vector.probabilities,
+          probabilityScale: config.probabilityScale,
+          policy,
+          maxRevealed: k,
+        });
+        if (certificate.disposition === "continue" && certificate.actionId === reference.actionId) {
+          continues += 1;
+        }
+      }
+    }
+    recomputedPerK.push({
+      k,
+      safeCoverage: denominator === 0 ? 0 : continues / denominator,
+      continues,
+      denominator,
+    });
+  }
+  requireCondition(
+    canonicalJson(evaluation.perK) === canonicalJson(recomputedPerK),
+    "per-k coverage drifted"
+  );
+  const recomputedPerPolicy = config.policyFamily.seeds.map((policySeed, index) => {
+    const policy = policiesArtifact.policies[index];
+    const subset = decisions.filter((row) => row.policyId === policy.policyId);
+    const metrics = aggregateStored(subset);
+    return {
+      policySeed,
+      policyId: policy.policyId,
+      adaptiveSafeCoverage: metrics.adaptiveSafeCoverage,
+      safeK1Coverage: metrics.safeK1Coverage,
+      safeK3Coverage: metrics.safeK3Coverage,
+      denominator: metrics.denominator,
+    };
+  });
+  requireCondition(
+    canonicalJson(evaluation.perPolicy) === canonicalJson(recomputedPerPolicy),
+    "per-policy coverage drifted"
+  );
+  const recomputedRefusals = {
+    adaptiveInsufficientConfidence: decisions.filter(
+      (row) => row.adaptive.certificate.disposition === "insufficient_confidence"
+    ).length,
+    fullVectorInsufficientConfidence: decisions.filter(
+      (row) => row.fullVector.disposition === "insufficient_confidence"
+    ).length,
+    safeK1InsufficientConfidence: decisions.filter(
+      (row) => row.safeK1.certificate.disposition === "insufficient_confidence"
+    ).length,
+    safeK3InsufficientConfidence: decisions.filter(
+      (row) => row.safeK3.certificate.disposition === "insufficient_confidence"
+    ).length,
+  };
+  requireCondition(
+    canonicalJson(evaluation.refusals) === canonicalJson(recomputedRefusals),
+    "refusal counts drifted"
+  );
+  const recomputedParity = {
+    adaptiveActionMatchesFullVector: decisions.filter(
+      (row) =>
+        row.adaptive.certificate.disposition === "continue" &&
+        row.adaptive.certificate.actionId === row.fullVector.actionId
+    ).length,
+    adaptiveContinues: adaptiveSafeContinues,
+    keaQualificationParity: decisions.filter(
+      (row) =>
+        row.qualification.disposition === "qualified" ||
+        row.qualification.disposition === "abstained"
+    ).length,
+    restrictedConsumerParity: decisions.filter(
+      (row) =>
+        row.restricted.disposition === "continue" ||
+        row.restricted.disposition === "insufficient_confidence"
+    ).length,
+  };
+  requireCondition(
+    canonicalJson(evaluation.parity) === canonicalJson(recomputedParity),
+    "Kea or consumer parity drifted"
+  );
+  const revealedCounts = decisions.map((row) => row.adaptive.certificate.revealed.length);
+  requireCondition(
+    canonicalJson(evaluation.revealedComponents) === canonicalJson(summarizeIntegers(revealedCounts)),
+    "revealed-component distribution drifted"
+  );
+  const expectedByteEvidence = {
+    unit: "canonical UTF-8 bytes; not tokens, cost, memory, energy, or total resources",
+    fullVector: summarizeIntegers(decisions.map((row) => row.bytes.fullVector)),
+    certificate: summarizeIntegers(decisions.map((row) => row.bytes.certificate)),
+    expectedCostSummary: summarizeIntegers(
+      decisions.map((row) => row.bytes.expectedCostSummary)
+    ),
+    qualification: summarizeIntegers(decisions.map((row) => row.bytes.qualification)),
+    wagglePacket: summarizeIntegers(decisions.map((row) => row.bytes.wagglePacket)),
+    waggleMessageEnvelope: summarizeIntegers(
+      decisions.map((row) => row.bytes.waggleMessageEnvelope)
+    ),
+    ledger: summarizeIntegers(decisions.map((row) => row.bytes.ledger)),
+  };
+  requireCondition(
+    canonicalJson(evaluation.bytes) === canonicalJson(expectedByteEvidence),
+    "byte evidence drifted"
+  );
+  const expectedContinuity = classifierContinuity(
+    vectors,
+    policiesArtifact.labelIds,
+    config.continuityReference
+  );
+  requireCondition(
+    canonicalJson(evaluation.classifierContinuity) === canonicalJson(expectedContinuity),
+    "classifier continuity evidence drifted"
+  );
+  const expectedNonClaims = [
+    "The result is a preregistered prospective secondary analysis, not an independent model replication.",
+    "A first certifying top-probability prefix is not a globally minimum message.",
+    "The expected-cost summary is an equally informed compact control and may be smaller.",
+    "Bytes are not tokens, credits, cost, memory, energy, or overall efficiency.",
+    "No privacy, security against a permitted malicious writer, production, or authority is established.",
+  ];
+  requireCondition(
+    canonicalJson(evaluation.nonClaims) === canonicalJson(expectedNonClaims),
+    "non-claims drifted"
   );
 
   // Effects
@@ -1297,7 +1884,16 @@ function verifyResultsDirectory(resultsDir, config) {
     const sample = samples[sampleIndex];
     requireExactKeys(
       sample,
-      ["caseId", "certificate", "policyId", "schemaVersion", "textIncluded"],
+      [
+        "authorityGranted",
+        "caseId",
+        "certificate",
+        "policyId",
+        "qualification",
+        "restricted",
+        "schemaVersion",
+        "textIncluded",
+      ],
       "sample row"
     );
     requireCondition(sample.schemaVersion === SAMPLE_SCHEMA, "sample schema mismatch");
@@ -1328,6 +1924,24 @@ function verifyResultsDirectory(resultsDir, config) {
     requireCondition(sample.certificate.authorityGranted === false, "sample certificate grants authority");
     const mathErrors = verifyDecisionCertificateMath(sample.certificate, samplePolicy);
     requireCondition(mathErrors.length === 0, `sample certificate math failed: ${mathErrors[0]}`);
+    const qualification = qualificationForCertificate(expected);
+    requireCondition(
+      canonicalJson(sample.qualification) === canonicalJson(qualification),
+      `sample qualification drift for ${sample.caseId}`
+    );
+    const restricted = {
+      schemaVersion: "kea.restricted-decision.v1",
+      disposition: expected.disposition === "continue" ? "continue" : "insufficient_confidence",
+      actionId: expected.disposition === "continue" ? expected.actionId : null,
+      certificateId: expected.certificateId,
+      qualificationId: qualification.qualificationId,
+      authorityGranted: false,
+    };
+    requireCondition(
+      canonicalJson(sample.restricted) === canonicalJson(restricted),
+      `sample restricted consumer drift for ${sample.caseId}`
+    );
+    requireCondition(sample.authorityGranted === false, "sample grants authority");
   }
 
   const primary = recomputePrimaryVerdict(
@@ -1336,6 +1950,7 @@ function verifyResultsDirectory(resultsDir, config) {
       safeK1Coverage,
       adaptiveDecisionMismatches,
       fullVectorDecisionMismatches,
+      expectedCostSummaryDecisionMismatches,
       naiveTop1DecisionMismatches,
       noStateContinues,
       attacksRejected: attacks.allSpecifiedTampersRejected === true && attacks.falseAccepts === 0,
@@ -1455,6 +2070,9 @@ function materializeValidResults(dir, tamper = {}) {
     vectorId: decisionVectorId(item.probabilities, scale),
     probabilityScale: scale,
     probabilities: [...item.probabilities],
+    trueIntent: syntheticLabels[
+      item.probabilities.indexOf(Math.max(...item.probabilities))
+    ],
     textIncluded: false,
   }));
 
@@ -1532,6 +2150,25 @@ function materializeValidResults(dir, tamper = {}) {
         maxRevealed: 3,
       });
       const naive = naiveTop1Action(vector.probabilities, policy);
+      const fullVectorReconstruction = {
+        encoding: "canonical-json",
+        vectorId: decisionVectorId(vector.probabilities, scale),
+        disposition: reference.disposition,
+        actionId: reference.actionId,
+      };
+      const expectedCostSummary = createExpectedCostSummary(
+        vector.caseId,
+        vector.vectorId,
+        policy,
+        reference
+      );
+      const qualification = qualificationForCertificate(adaptive);
+      const bytes = measureTransportBytes(
+        adaptive,
+        qualification,
+        vector,
+        expectedCostSummary
+      );
 
       decisions.push({
         schemaVersion: DECISION_ROW_SCHEMA,
@@ -1543,6 +2180,8 @@ function materializeValidResults(dir, tamper = {}) {
           disposition: reference.disposition,
           actionId: reference.actionId,
         },
+        fullVectorReconstruction,
+        expectedCostSummary,
         adaptive: { certificate: adaptive },
         safeK1: { certificate: safeK1 },
         safeK3: { certificate: safeK3 },
@@ -1555,6 +2194,7 @@ function materializeValidResults(dir, tamper = {}) {
               : adaptive.disposition === "insufficient_confidence"
                 ? "abstained"
                 : "rejected",
+          qualificationId: qualification.qualificationId,
           authorityGranted: false,
         },
         restricted: {
@@ -1563,6 +2203,7 @@ function materializeValidResults(dir, tamper = {}) {
           actionId: adaptive.disposition === "continue" ? adaptive.actionId : null,
           authorityGranted: false,
         },
+        bytes,
       });
     }
   }
@@ -1573,6 +2214,7 @@ function materializeValidResults(dir, tamper = {}) {
   let safeK3Continues = 0;
   let adaptiveDecisionMismatches = 0;
   let fullVectorDecisionMismatches = 0;
+  let expectedCostSummaryDecisionMismatches = 0;
   let naiveTop1DecisionMismatches = 0;
   let noStateContinues = 0;
   const policyById = new Map(policies.map((policy) => [policy.policyId, policy]));
@@ -1603,6 +2245,19 @@ function materializeValidResults(dir, tamper = {}) {
         adaptiveDecisionMismatches += 1;
       }
       if (row.noState.disposition === "continue") noStateContinues += 1;
+      if (
+        row.fullVectorReconstruction.vectorId !== row.vectorId ||
+        row.fullVectorReconstruction.disposition !== reference.disposition ||
+        row.fullVectorReconstruction.actionId !== reference.actionId
+      ) {
+        fullVectorDecisionMismatches += 1;
+      }
+      if (
+        row.expectedCostSummary.disposition !== reference.disposition ||
+        row.expectedCostSummary.actionId !== reference.actionId
+      ) {
+        expectedCostSummaryDecisionMismatches += 1;
+      }
     } catch {
       /* invalid mass */
     }
@@ -1619,8 +2274,14 @@ function materializeValidResults(dir, tamper = {}) {
     safeK3Coverage,
     adaptiveDecisionMismatches,
     fullVectorDecisionMismatches,
+    expectedCostSummaryDecisionMismatches,
     naiveTop1DecisionMismatches,
     noStateContinues,
+    fullVectorNonTiedDenominator: fullVectorNonTied,
+    adaptiveSafeContinues,
+    safeK1Continues,
+    safeK3Continues,
+    adaptiveCoverageGainOverSafeK1: adaptiveSafeCoverage - safeK1Coverage,
   };
 
   const primary = recomputePrimaryVerdict(
@@ -1650,12 +2311,24 @@ function materializeValidResults(dir, tamper = {}) {
       policyId: policies[0].policyId,
       textIncluded: false,
       certificate: row.adaptive.certificate,
+      qualification: qualificationForCertificate(row.adaptive.certificate),
+      restricted: {
+        schemaVersion: "kea.restricted-decision.v1",
+        disposition: row.restricted.disposition,
+        actionId: row.restricted.actionId,
+        certificateId: row.adaptive.certificate.certificateId,
+        qualificationId: row.qualification.qualificationId,
+        authorityGranted: false,
+      },
+      authorityGranted: false,
     };
   });
 
   const environment = {
     schemaVersion: ENVIRONMENT_SCHEMA,
     status: "preregistered-prospective-secondary-analysis",
+    runner: { synthetic: true },
+    evaluator: { node: process.version, platform: process.platform, arch: process.arch },
     providerApiCalls: tamper.nonzeroEffects ? 1 : 0,
     modelApiCalls: 0,
     authorityEffectsExecuted: 0,
@@ -1674,6 +2347,100 @@ function materializeValidResults(dir, tamper = {}) {
     // leave policyId stale → fail content match / regenerate mismatch
   }
 
+  const bootstrap = caseClusteredBootstrap(
+    decisions,
+    config.bootstrap.seed,
+    config.bootstrap.draws
+  );
+  const perK = [];
+  for (let k = 1; k <= config.maxRevealedProbabilities; k += 1) {
+    let continues = 0;
+    let denominator = 0;
+    for (const vector of vectors) {
+      for (const policy of policies) {
+        const reference = referenceDecision(vector.probabilities, scale, policy);
+        if (reference.disposition !== "continue") continue;
+        denominator += 1;
+        const certificate = createDecisionCertificate({
+          caseId: vector.caseId,
+          probabilities: vector.probabilities,
+          probabilityScale: scale,
+          policy,
+          maxRevealed: k,
+        });
+        if (certificate.disposition === "continue" && certificate.actionId === reference.actionId) {
+          continues += 1;
+        }
+      }
+    }
+    perK.push({ k, safeCoverage: denominator === 0 ? 0 : continues / denominator, continues, denominator });
+  }
+  const perPolicy = config.policyFamily.seeds.map((policySeed, index) => {
+    const policy = policies[index];
+    const subset = decisions.filter((row) => row.policyId === policy.policyId);
+    const aggregate = aggregateStored(subset);
+    return {
+      policySeed,
+      policyId: policy.policyId,
+      adaptiveSafeCoverage: aggregate.adaptiveSafeCoverage,
+      safeK1Coverage: aggregate.safeK1Coverage,
+      safeK3Coverage: aggregate.safeK3Coverage,
+      denominator: aggregate.denominator,
+    };
+  });
+  const refusals = {
+    adaptiveInsufficientConfidence: decisions.filter(
+      (row) => row.adaptive.certificate.disposition === "insufficient_confidence"
+    ).length,
+    fullVectorInsufficientConfidence: decisions.filter(
+      (row) => row.fullVector.disposition === "insufficient_confidence"
+    ).length,
+    safeK1InsufficientConfidence: decisions.filter(
+      (row) => row.safeK1.certificate.disposition === "insufficient_confidence"
+    ).length,
+    safeK3InsufficientConfidence: decisions.filter(
+      (row) => row.safeK3.certificate.disposition === "insufficient_confidence"
+    ).length,
+  };
+  const parity = {
+    adaptiveActionMatchesFullVector: decisions.filter(
+      (row) =>
+        row.adaptive.certificate.disposition === "continue" &&
+        row.adaptive.certificate.actionId === row.fullVector.actionId
+    ).length,
+    adaptiveContinues: adaptiveSafeContinues,
+    keaQualificationParity: decisions.filter(
+      (row) =>
+        row.qualification.disposition === "qualified" ||
+        row.qualification.disposition === "abstained"
+    ).length,
+    restrictedConsumerParity: decisions.filter(
+      (row) =>
+        row.restricted.disposition === "continue" ||
+        row.restricted.disposition === "insufficient_confidence"
+    ).length,
+  };
+  const byteEvidence = {
+    unit: "canonical UTF-8 bytes; not tokens, cost, memory, energy, or total resources",
+    fullVector: summarizeIntegers(decisions.map((row) => row.bytes.fullVector)),
+    certificate: summarizeIntegers(decisions.map((row) => row.bytes.certificate)),
+    expectedCostSummary: summarizeIntegers(decisions.map((row) => row.bytes.expectedCostSummary)),
+    qualification: summarizeIntegers(decisions.map((row) => row.bytes.qualification)),
+    wagglePacket: summarizeIntegers(decisions.map((row) => row.bytes.wagglePacket)),
+    waggleMessageEnvelope: summarizeIntegers(
+      decisions.map((row) => row.bytes.waggleMessageEnvelope)
+    ),
+    ledger: summarizeIntegers(decisions.map((row) => row.bytes.ledger)),
+  };
+  const continuity = classifierContinuity(vectors, syntheticLabels, config.continuityReference);
+  const nonClaims = [
+    "The result is a preregistered prospective secondary analysis, not an independent model replication.",
+    "A first certifying top-probability prefix is not a globally minimum message.",
+    "The expected-cost summary is an equally informed compact control and may be smaller.",
+    "Bytes are not tokens, credits, cost, memory, energy, or overall efficiency.",
+    "No privacy, security against a permitted malicious writer, production, or authority is established.",
+  ];
+
   const evaluation = {
     schemaVersion: EVALUATION_SCHEMA,
     status: "preregistered-prospective-secondary-analysis",
@@ -1682,6 +2449,17 @@ function materializeValidResults(dir, tamper = {}) {
     decisionCount: decisions.length,
     sampleCount: samples.length,
     metrics,
+    bootstrap,
+    perK,
+    perPolicy,
+    refusals,
+    parity,
+    revealedComponents: summarizeIntegers(
+      decisions.map((row) => row.adaptive.certificate.revealed.length)
+    ),
+    classifierContinuity: continuity,
+    bytes: byteEvidence,
+    nonClaims,
     primaryGates: primary.gates,
     scientificVerdict: primary.scientificVerdict,
     effects: {
@@ -1735,19 +2513,36 @@ function materializeValidResults(dir, tamper = {}) {
     writeFileSync(join(dir, "notes.txt"), "extra\n", "utf8");
   }
 
+  const vectorsPayload = `${vectors.map((row) => canonicalJson(row)).join("\n")}\n`;
+  const runBody = {
+    schemaVersion: "waggle.decision-sufficiency.run.v1",
+    status: "preregistered-prospective-secondary-analysis",
+    author: "William Keenan",
+    resources: { trainingRuns: 1, scoredCases: vectors.length, vectorComponents: 77 },
+    vectorArtifact: {
+      rows: vectors.length,
+      path: "vectors.jsonl",
+      sha256: sha256Hex(vectorsPayload),
+      textIncluded: false,
+    },
+    effects: { providerApiCalls: 0, modelApiCalls: 0, authorityEffectsExecuted: 0 },
+  };
+  const run = { ...runBody, runId: contentId("decisionrun", runBody) };
   writeFileSync(join(dir, "environment.json"), `${canonicalJson(environment)}\n`, "utf8");
+  writeFileSync(join(dir, "run.json"), `${canonicalJson(run)}\n`, "utf8");
   writeFileSync(join(dir, "policies.json"), `${canonicalJson(policiesArtifact)}\n`, "utf8");
   writeFileSync(join(dir, "evaluation.json"), `${canonicalJson(evaluation)}\n`, "utf8");
   writeFileSync(join(dir, "attacks.json"), `${canonicalJson(attacks)}\n`, "utf8");
   writeFileSync(
     join(dir, "vectors.jsonl"),
-    `${vectors.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    vectorsPayload,
     "utf8"
   );
   writeFileSync(
-    join(dir, "decisions.jsonl"),
-    `${decisions.map((row) => JSON.stringify(row)).join("\n")}\n`,
-    "utf8"
+    join(dir, "decisions.jsonl.gz"),
+    gzipSync(Buffer.from(`${decisions.map((row) => canonicalJson(row)).join("\n")}\n`, "utf8"), {
+      level: 9,
+    })
   );
   writeFileSync(
     join(dir, "samples.jsonl"),
@@ -1792,9 +2587,10 @@ function materializeValidResults(dir, tamper = {}) {
     // Drop half the decisions so the case×policy product is incomplete.
     const kept = decisions.slice(0, Math.max(1, Math.floor(decisions.length / 2)));
     writeFileSync(
-      join(dir, "decisions.jsonl"),
-      `${kept.map((row) => JSON.stringify(row)).join("\n")}\n`,
-      "utf8"
+      join(dir, "decisions.jsonl.gz"),
+      gzipSync(Buffer.from(`${kept.map((row) => canonicalJson(row)).join("\n")}\n`, "utf8"), {
+        level: 9,
+      })
     );
     const evaluationPath = join(dir, "evaluation.json");
     const evaluationBody = JSON.parse(readFileSync(evaluationPath, "utf8"));
@@ -1996,10 +2792,15 @@ function runSelfTest() {
   }
 
   function mutateDecisions(packageDir, mutate) {
-    const path = join(packageDir, "decisions.jsonl");
-    const rows = parseJsonl(readFileSync(path, "utf8"), "decisions.jsonl");
+    const path = join(packageDir, "decisions.jsonl.gz");
+    const rows = parseGzipJsonl(path, "decisions.jsonl.gz");
     mutate(rows);
-    writeFileSync(path, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`, "utf8");
+    writeFileSync(
+      path,
+      gzipSync(Buffer.from(`${rows.map((row) => canonicalJson(row)).join("\n")}\n`, "utf8"), {
+        level: 9,
+      })
+    );
     rewritePackageChecksums(packageDir);
   }
 

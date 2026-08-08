@@ -5,8 +5,8 @@
  * Full mode reads text-free prediction-state artifacts from the runner, derives
  * the 12 SHA-256 four-action policies, evaluates every matched control arm,
  * measures byte boundaries, runs attack probes, applies primary admission
- * gates, and writes evaluation artifacts. The synthetic --self-test path never
- * loads BANKING77 outputs and never inspects scored results.
+ * gates, and writes the frozen evaluation inventory. The synthetic --self-test
+ * path never loads BANKING77 outputs and never inspects scored results.
  */
 
 import { createHash } from "node:crypto";
@@ -42,12 +42,30 @@ import {
 } from "../../src/index.js";
 
 // ---------------------------------------------------------------------------
-// Paths and config
+// Paths, schemas, config
 // ---------------------------------------------------------------------------
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG = join(HERE, "config.v1.json");
 const DEFAULT_OUTPUT = join(HERE, "results/local-v1");
+
+const EVALUATION_SCHEMA = "waggle.decision-sufficiency.evaluation.v1";
+const ENVIRONMENT_SCHEMA = "waggle.decision-sufficiency.environment.v1";
+const POLICIES_SCHEMA = "waggle.decision-sufficiency.policies.v1";
+const ATTACKS_SCHEMA = "waggle.decision-sufficiency.attacks.v1";
+const VECTOR_SCHEMA = "waggle.decision-sufficiency.vector.v1";
+const DECISION_ROW_SCHEMA = "waggle.decision-sufficiency.decision.v1";
+const SAMPLE_SCHEMA = "waggle.decision-sufficiency.sample.v1";
+
+const REQUIRED_ARTIFACTS = [
+  "attacks.json",
+  "decisions.jsonl",
+  "environment.json",
+  "evaluation.json",
+  "policies.json",
+  "samples.jsonl",
+  "vectors.jsonl",
+] as const;
 
 interface DecisionSufficiencyConfig {
   schemaVersion: "waggle.decision-sufficiency.config.v1";
@@ -88,43 +106,58 @@ interface DecisionSufficiencyConfig {
 }
 
 interface PredictionVectorRow {
+  schemaVersion?: string;
   caseId: string;
-  sourceIndex: number;
+  sourceIndex?: number;
   vectorId: string;
+  probabilityScale?: number;
   probabilities: number[];
   trueIntent?: string;
-  textIncluded?: false;
+  textIncluded?: boolean;
+  labelIds?: string[];
+  [key: string]: unknown;
 }
 
-interface ArmDecision {
-  arm: string;
-  disposition: "continue" | "insufficient_confidence" | "abstain";
-  actionId: string | null;
-  revealedCount: number | null;
-  matchesFullVector: boolean | null;
-  authorityGranted: false;
-}
-
-interface CasePolicyRecord {
+interface CasePolicyDecision {
+  schemaVersion: typeof DECISION_ROW_SCHEMA;
   caseId: string;
-  policySeed: number;
   policyId: string;
-  fullVector: ArmDecision;
-  adaptive: ArmDecision & {
-    certificateId: string | null;
-    qualificationDisposition: string | null;
-    consumerDisposition: string | null;
-    certificateBytes: number;
-    qualificationBytes: number;
-    wagglePacketBytes: number;
-    waggleMessageBytes: number;
-    ledgerBytes: number;
+  policySeed: number;
+  vectorId: string;
+  authorityGranted: false;
+  fullVector: {
+    disposition: "continue" | "insufficient_confidence";
+    actionId: string | null;
   };
-  safeK1: ArmDecision;
-  safeK3: ArmDecision;
-  naiveTop1: ArmDecision;
-  noState: ArmDecision;
-  fullVectorBytes: number;
+  adaptive: { certificate: WaggleDecisionCertificate };
+  safeK1: { certificate: WaggleDecisionCertificate };
+  safeK3: { certificate: WaggleDecisionCertificate };
+  naiveTop1: {
+    disposition: "continue" | "insufficient_confidence";
+    actionId: string | null;
+  };
+  noState: {
+    disposition: "abstain";
+    actionId: null;
+  };
+  qualification: {
+    disposition: KeaDecisionQualification["disposition"];
+    authorityGranted: false;
+    qualificationId: string;
+  };
+  restricted: {
+    disposition: "continue" | "insufficient_confidence" | "abstain";
+    actionId: string | null;
+    authorityGranted: false;
+  };
+  bytes: {
+    fullVector: number;
+    certificate: number;
+    qualification: number;
+    wagglePacket: number;
+    waggleMessageEnvelope: number;
+    ledger: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +178,14 @@ function readJson<T>(path: string): T {
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function writeCanonicalJson(path: string, value: unknown): void {
+  writeFileSync(path, `${canonicalJson(value)}\n`, "utf8");
+}
+
+function writeJsonl(path: string, rows: readonly unknown[]): void {
+  writeFileSync(path, `${rows.map((row) => canonicalJson(row)).join("\n")}\n`, "utf8");
 }
 
 function wireLabel(label: string): string {
@@ -191,11 +232,12 @@ function median(values: number[]): number {
 }
 
 // ---------------------------------------------------------------------------
-// Policy family (frozen SHA-256 partition)
+// Policy family (frozen SHA-256 partition: SHA-256(seed:labelId))
 // ---------------------------------------------------------------------------
 
 export function assignActionIndex(seed: number, labelId: string, actionCount: number): number {
-  const digest = createHash("sha256").update(`${seed}|${labelId}`, "utf8").digest();
+  // Independent verifier regenerates via SHA-256(`${seed}:${labelId}`).
+  const digest = createHash("sha256").update(`${seed}:${labelId}`, "utf8").digest();
   return digest.readUInt32BE(0) % actionCount;
 }
 
@@ -237,31 +279,26 @@ function naiveTop1Action(
   policy: WaggleDecisionPolicy
 ): { disposition: "continue" | "insufficient_confidence"; actionId: string | null } {
   let bestIndex = 0;
-  let bestMass = -1;
-  for (let index = 0; index < probabilities.length; index += 1) {
-    const mass = probabilities[index];
-    if (mass > bestMass || (mass === bestMass && index < bestIndex)) {
-      bestMass = mass;
+  for (let index = 1; index < probabilities.length; index += 1) {
+    if (
+      probabilities[index] > probabilities[bestIndex] ||
+      (probabilities[index] === probabilities[bestIndex] && index < bestIndex)
+    ) {
       bestIndex = index;
     }
   }
-  // Break pure ties among max mass by lexicographic smallest index already applied.
-  const winners = probabilities
-    .map((mass, index) => ({ mass, index }))
-    .filter((item) => item.mass === bestMass);
+  const costs = policy.costMatrix.map((row) => row[bestIndex]);
+  const minCost = Math.min(...costs);
+  const winners = costs
+    .map((cost, actionIndex) => ({ cost, actionIndex }))
+    .filter((item) => item.cost === minCost);
   if (winners.length !== 1) {
-    // Deterministic unique top-1: lowest index among max-mass labels still maps to an action.
+    return { disposition: "insufficient_confidence", actionId: null };
   }
-  const labelIndex = winners[0].index;
-  // Action with match cost 0 for this label.
-  let actionId: string | null = null;
-  for (let actionIndex = 0; actionIndex < policy.actionIds.length; actionIndex += 1) {
-    if (policy.costMatrix[actionIndex][labelIndex] === 0) {
-      actionId = policy.actionIds[actionIndex];
-      break;
-    }
-  }
-  return { disposition: actionId ? "continue" : "insufficient_confidence", actionId };
+  return {
+    disposition: "continue",
+    actionId: policy.actionIds[winners[0].actionIndex],
+  };
 }
 
 function certificatePacket(certificate: WaggleDecisionCertificate): WaggleV0Packet {
@@ -289,118 +326,65 @@ function certificatePacket(certificate: WaggleDecisionCertificate): WaggleV0Pack
   };
 }
 
-function evaluateCertificateArm(input: {
-  caseId: string;
-  probabilities: readonly number[];
-  probabilityScale: number;
-  policy: WaggleDecisionPolicy;
-  maxRevealed: number;
-  fullVectorActionId: string | null;
-  fullVectorDisposition: "continue" | "insufficient_confidence";
-  measureTransport: boolean;
-}): CasePolicyRecord["adaptive"] {
-  const certificate = createDecisionCertificate({
-    caseId: input.caseId,
-    probabilities: input.probabilities,
-    probabilityScale: input.probabilityScale,
-    policy: input.policy,
-    maxRevealed: input.maxRevealed,
+function measureTransportBytes(
+  certificate: WaggleDecisionCertificate,
+  qualification: KeaDecisionQualification,
+  caseId: string
+): {
+  fullVector: number;
+  certificate: number;
+  qualification: number;
+  wagglePacket: number;
+  waggleMessageEnvelope: number;
+  ledger: number;
+} {
+  const packet = certificatePacket(certificate);
+  const message = createWaggleV0Message({
+    missionId: "mission_decision_sufficiency",
+    workNodeId: `work_${caseId}`,
+    senderAgentId: "agent_decision_producer",
+    receiverActorIds: ["agent_restricted_consumer"],
+    packet,
+    contextPackId: caseId,
+    artifactRefs: [certificate.certificateId],
+    evidenceRefs: [certificate.vectorId],
+    authorityEffect: "none",
+    sensitivity: "public",
+    createdAt: "2026-08-05T00:00:00.000Z",
   });
-  const qualification = qualifyDecisionCertificate({
-    certificate,
-    policy: input.policy,
-    fullProbabilityVector: input.probabilities,
-  });
-  const consumer = consumeQualifiedDecision({
-    certificate,
-    policy: input.policy,
-    qualification,
-  });
-
-  requireCondition(certificate.authorityGranted === false, "certificate granted authority");
-  requireCondition(qualification.authorityGranted === false, "qualification granted authority");
-  requireCondition(consumer.authorityGranted === false, "consumer granted authority");
-
-  let wagglePacketBytes = 0;
-  let waggleMessageBytes = 0;
-  let ledgerBytes = 0;
-  if (input.measureTransport) {
-    const packet = certificatePacket(certificate);
-    wagglePacketBytes = waggleWireBytes(packet);
-    const message = createWaggleV0Message({
-      missionId: "mission_decision_sufficiency",
-      workNodeId: `work_${input.caseId}`,
-      senderAgentId: "agent_decision_producer",
-      receiverActorIds: ["agent_restricted_consumer"],
-      packet,
-      contextPackId: input.caseId,
-      artifactRefs: [certificate.certificateId],
-      evidenceRefs: [certificate.vectorId],
-      authorityEffect: "none",
-      sensitivity: "public",
+  const syntheticLedger = new MemoryKeaLedger();
+  syntheticLedger.append(
+    "interpretation",
+    message.messageId,
+    {
+      interpretationId: contentId("keainterp", {
+        certificateId: certificate.certificateId,
+        qualificationId: qualification.qualificationId,
+      }),
+      messageId: message.messageId,
+      disposition: qualification.disposition === "qualified" ? "verified" : "rejected",
+      humanGloss: "decision-certificate-qualification",
+      proposedMissionDelta: packet.delta,
+      verification: {
+        exactRoundTrip: true,
+        decoderBehavioralParity: "not-evaluated",
+        policyParity: "not-evaluated",
+      },
+      budget: { maxUndecodableBytes: 0, usedUndecodableBytes: 0, exceeded: false },
+      watchSignals: [],
+      authorityGranted: false,
       createdAt: "2026-08-05T00:00:00.000Z",
-    });
-    waggleMessageBytes = decisionStateBytes(message);
-    // Ledger bytes are measured as a standalone, authority-free qualification append
-    // (restricted consumer path never grants effects).
-    const syntheticLedger = new MemoryKeaLedger();
-    syntheticLedger.append(
-      "interpretation",
-      message.messageId,
-      {
-        interpretationId: contentId("keainterp", {
-          certificateId: certificate.certificateId,
-          qualificationId: qualification.qualificationId,
-        }),
-        messageId: message.messageId,
-        disposition: consumer.disposition === "continue" ? "verified" : "rejected",
-        humanGloss: "decision-certificate-qualification",
-        proposedMissionDelta: packet.delta,
-        verification: {
-          exactRoundTrip: true,
-          decoderBehavioralParity: "not-evaluated",
-          policyParity: "not-evaluated",
-        },
-        budget: { maxUndecodableBytes: 0, usedUndecodableBytes: 0, exceeded: false },
-        watchSignals: [],
-        authorityGranted: false,
-        createdAt: "2026-08-05T00:00:00.000Z",
-      } as never,
-      "2026-08-05T00:00:00.000Z"
-    );
-    ledgerBytes = decisionStateBytes(syntheticLedger.read());
-  }
-
-  const matchesFullVector =
-    certificate.disposition === "continue"
-      ? input.fullVectorDisposition === "continue" && certificate.actionId === input.fullVectorActionId
-      : null;
+    } as never,
+    "2026-08-05T00:00:00.000Z"
+  );
 
   return {
-    arm: `adaptive_safe_k_le_${input.maxRevealed}`,
-    disposition:
-      consumer.disposition === "continue"
-        ? "continue"
-        : consumer.disposition === "insufficient_confidence"
-          ? "insufficient_confidence"
-          : certificate.disposition === "continue"
-            ? "continue"
-            : "insufficient_confidence",
-    actionId: consumer.disposition === "continue" ? consumer.actionId : certificate.actionId,
-    revealedCount: certificate.revealed.length,
-    matchesFullVector:
-      certificate.disposition === "continue"
-        ? certificate.actionId === input.fullVectorActionId && input.fullVectorDisposition === "continue"
-        : matchesFullVector,
-    authorityGranted: false,
-    certificateId: certificate.certificateId,
-    qualificationDisposition: qualification.disposition,
-    consumerDisposition: consumer.disposition,
-    certificateBytes: decisionStateBytes(certificate),
-    qualificationBytes: decisionStateBytes(qualification),
-    wagglePacketBytes,
-    waggleMessageBytes,
-    ledgerBytes,
+    fullVector: 0,
+    certificate: decisionStateBytes(certificate),
+    qualification: decisionStateBytes(qualification),
+    wagglePacket: waggleWireBytes(packet),
+    waggleMessageEnvelope: decisionStateBytes(message),
+    ledger: decisionStateBytes(syntheticLedger.read()),
   };
 }
 
@@ -411,33 +395,40 @@ function evaluateCasePolicy(input: {
   policy: WaggleDecisionPolicy;
   policySeed: number;
   maxRevealed: number;
+  vectorId: string;
   measureTransport: boolean;
-}): CasePolicyRecord {
+}): CasePolicyDecision {
   const full = referenceDecision(input.probabilities, input.probabilityScale, input.policy);
-  const fullVectorBytes = decisionStateBytes({
-    probabilityScale: input.probabilityScale,
-    probabilities: input.probabilities,
-  });
-
-  const adaptive = evaluateCertificateArm({
+  const adaptiveCertificate = createDecisionCertificate({
     caseId: input.caseId,
     probabilities: input.probabilities,
     probabilityScale: input.probabilityScale,
     policy: input.policy,
     maxRevealed: input.maxRevealed,
-    fullVectorActionId: full.actionId,
-    fullVectorDisposition: full.disposition,
-    measureTransport: input.measureTransport,
+  });
+  const qualification = qualifyDecisionCertificate({
+    certificate: adaptiveCertificate,
+    policy: input.policy,
+    fullProbabilityVector: input.probabilities,
+  });
+  const restricted = consumeQualifiedDecision({
+    certificate: adaptiveCertificate,
+    policy: input.policy,
+    qualification,
   });
 
-  const safeK1Cert = createDecisionCertificate({
+  requireCondition(adaptiveCertificate.authorityGranted === false, "certificate granted authority");
+  requireCondition(qualification.authorityGranted === false, "qualification granted authority");
+  requireCondition(restricted.authorityGranted === false, "consumer granted authority");
+
+  const safeK1Certificate = createDecisionCertificate({
     caseId: input.caseId,
     probabilities: input.probabilities,
     probabilityScale: input.probabilityScale,
     policy: input.policy,
     maxRevealed: 1,
   });
-  const safeK3Cert = createDecisionCertificate({
+  const safeK3Certificate = createDecisionCertificate({
     caseId: input.caseId,
     probabilities: input.probabilities,
     probabilityScale: input.probabilityScale,
@@ -446,61 +437,54 @@ function evaluateCasePolicy(input: {
   });
   const naive = naiveTop1Action(input.probabilities, input.policy);
 
-  const fullArm: ArmDecision = {
-    arm: "full_vector",
-    disposition: full.disposition,
-    actionId: full.actionId,
-    revealedCount: input.probabilities.length,
-    matchesFullVector: true,
-    authorityGranted: false,
-  };
-
-  const toSafeArm = (
-    arm: string,
-    certificate: WaggleDecisionCertificate
-  ): ArmDecision => ({
-    arm,
-    disposition: certificate.disposition,
-    actionId: certificate.actionId,
-    revealedCount: certificate.revealed.length,
-    matchesFullVector:
-      certificate.disposition === "continue"
-        ? full.disposition === "continue" && certificate.actionId === full.actionId
-        : null,
-    authorityGranted: false,
+  const bytes = input.measureTransport
+    ? measureTransportBytes(adaptiveCertificate, qualification, input.caseId)
+    : {
+        fullVector: 0,
+        certificate: decisionStateBytes(adaptiveCertificate),
+        qualification: decisionStateBytes(qualification),
+        wagglePacket: 0,
+        waggleMessageEnvelope: 0,
+        ledger: 0,
+      };
+  bytes.fullVector = decisionStateBytes({
+    probabilityScale: input.probabilityScale,
+    probabilities: input.probabilities,
   });
 
   return {
+    schemaVersion: DECISION_ROW_SCHEMA,
     caseId: input.caseId,
-    policySeed: input.policySeed,
     policyId: input.policy.policyId,
-    fullVector: fullArm,
-    adaptive: {
-      ...adaptive,
-      arm: "adaptive_safe_k_le_8",
+    policySeed: input.policySeed,
+    vectorId: input.vectorId,
+    authorityGranted: false,
+    fullVector: {
+      disposition: full.disposition,
+      actionId: full.actionId,
     },
-    safeK1: toSafeArm("safe_k_1", safeK1Cert),
-    safeK3: toSafeArm("safe_k_3", safeK3Cert),
+    adaptive: { certificate: adaptiveCertificate },
+    safeK1: { certificate: safeK1Certificate },
+    safeK3: { certificate: safeK3Certificate },
     naiveTop1: {
-      arm: "naive_top1",
       disposition: naive.disposition,
       actionId: naive.actionId,
-      revealedCount: 1,
-      matchesFullVector:
-        naive.disposition === "continue" && full.disposition === "continue"
-          ? naive.actionId === full.actionId
-          : naive.disposition === full.disposition && naive.actionId === full.actionId,
-      authorityGranted: false,
     },
     noState: {
-      arm: "no_state",
       disposition: "abstain",
       actionId: null,
-      revealedCount: 0,
-      matchesFullVector: false,
+    },
+    qualification: {
+      disposition: qualification.disposition,
+      authorityGranted: false,
+      qualificationId: qualification.qualificationId,
+    },
+    restricted: {
+      disposition: restricted.disposition,
+      actionId: restricted.actionId,
       authorityGranted: false,
     },
-    fullVectorBytes,
+    bytes,
   };
 }
 
@@ -508,65 +492,82 @@ function evaluateCasePolicy(input: {
 // Metrics, bootstrap, primary gates
 // ---------------------------------------------------------------------------
 
-function coverageOf(
-  records: readonly CasePolicyRecord[],
-  arm: "adaptive" | "safeK1" | "safeK3"
-): { continues: number; denominator: number; coverage: number; mismatches: number } {
-  const eligible = records.filter((record) => record.fullVector.disposition === "continue");
-  const denominator = eligible.length;
-  let continues = 0;
-  let mismatches = 0;
-  for (const record of eligible) {
-    const decision = record[arm];
-    if (decision.disposition === "continue") {
-      continues += 1;
-      if (decision.actionId !== record.fullVector.actionId) mismatches += 1;
+function aggregateMetrics(records: readonly CasePolicyDecision[]): {
+  fullVectorNonTiedDenominator: number;
+  adaptiveSafeContinues: number;
+  safeK1Continues: number;
+  safeK3Continues: number;
+  adaptiveSafeCoverage: number;
+  safeK1Coverage: number;
+  safeK3Coverage: number;
+  adaptiveCoverageGainOverSafeK1: number;
+  adaptiveDecisionMismatches: number;
+  fullVectorDecisionMismatches: number;
+  naiveTop1DecisionMismatches: number;
+  noStateContinues: number;
+} {
+  let fullVectorNonTied = 0;
+  let adaptiveSafeContinues = 0;
+  let safeK1Continues = 0;
+  let safeK3Continues = 0;
+  let adaptiveDecisionMismatches = 0;
+  let fullVectorDecisionMismatches = 0;
+  let naiveTop1DecisionMismatches = 0;
+  let noStateContinues = 0;
+
+  for (const row of records) {
+    // Full-vector reconstruction mismatch: stored full-vector arm vs recomputed reference.
+    // By construction the stored arm is the recomputed reference; keep the counter explicit.
+    if (row.fullVector.disposition === "continue") fullVectorNonTied += 1;
+    else if (row.fullVector.actionId !== null) fullVectorDecisionMismatches += 1;
+
+    if (row.adaptive.certificate.disposition === "continue") {
+      adaptiveSafeContinues += 1;
+      if (
+        row.fullVector.disposition !== "continue" ||
+        row.adaptive.certificate.actionId !== row.fullVector.actionId
+      ) {
+        adaptiveDecisionMismatches += 1;
+      }
     }
+
+    if (row.safeK1.certificate.disposition === "continue") safeK1Continues += 1;
+    if (row.safeK3.certificate.disposition === "continue") safeK3Continues += 1;
+
+    if (
+      row.fullVector.disposition === "continue" &&
+      (row.naiveTop1.disposition !== "continue" ||
+        row.naiveTop1.actionId !== row.fullVector.actionId)
+    ) {
+      naiveTop1DecisionMismatches += 1;
+    }
+
+    if (row.noState.disposition === "continue") noStateContinues += 1;
   }
+
+  const adaptiveSafeCoverage =
+    fullVectorNonTied === 0 ? 0 : adaptiveSafeContinues / fullVectorNonTied;
+  const safeK1Coverage = fullVectorNonTied === 0 ? 0 : safeK1Continues / fullVectorNonTied;
+  const safeK3Coverage = fullVectorNonTied === 0 ? 0 : safeK3Continues / fullVectorNonTied;
+
   return {
-    continues,
-    denominator,
-    coverage: denominator === 0 ? 0 : continues / denominator,
-    mismatches,
+    fullVectorNonTiedDenominator: fullVectorNonTied,
+    adaptiveSafeContinues,
+    safeK1Continues,
+    safeK3Continues,
+    adaptiveSafeCoverage,
+    safeK1Coverage,
+    safeK3Coverage,
+    adaptiveCoverageGainOverSafeK1: adaptiveSafeCoverage - safeK1Coverage,
+    adaptiveDecisionMismatches,
+    fullVectorDecisionMismatches,
+    naiveTop1DecisionMismatches,
+    noStateContinues,
   };
 }
 
-function countNaiveMismatches(records: readonly CasePolicyRecord[]): number {
-  let count = 0;
-  for (const record of records) {
-    if (record.fullVector.disposition !== "continue") continue;
-    if (
-      record.naiveTop1.disposition !== "continue" ||
-      record.naiveTop1.actionId !== record.fullVector.actionId
-    ) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function countNoStateContinues(records: readonly CasePolicyRecord[]): number {
-  return records.filter((record) => record.noState.disposition === "continue").length;
-}
-
-function countFullVectorReconstructionMismatches(records: readonly CasePolicyRecord[]): number {
-  // Reconstruction mismatch: adaptive certificate continues with action that differs from full vector,
-  // or full-vector reference is inconsistent with itself (should be zero by construction).
-  let count = 0;
-  for (const record of records) {
-    if (
-      record.adaptive.disposition === "continue" &&
-      record.adaptive.actionId !== record.fullVector.actionId
-    ) {
-      count += 1;
-    }
-    if (record.fullVector.matchesFullVector !== true) count += 1;
-  }
-  return count;
-}
-
 function caseClusteredBootstrap(
-  records: readonly CasePolicyRecord[],
+  records: readonly CasePolicyDecision[],
   seed: number,
   draws: number
 ): {
@@ -576,7 +577,7 @@ function caseClusteredBootstrap(
   adaptiveSafeCoverageInterval95: [number, number];
   adaptiveCoverageGainOverSafeK1Interval95: [number, number];
 } {
-  const byCase = new Map<string, CasePolicyRecord[]>();
+  const byCase = new Map<string, CasePolicyDecision[]>();
   for (const record of records) {
     const list = byCase.get(record.caseId) ?? [];
     list.push(record);
@@ -588,15 +589,14 @@ function caseClusteredBootstrap(
   const gainValues: number[] = [];
 
   for (let draw = 0; draw < draws; draw += 1) {
-    const sampled: CasePolicyRecord[] = [];
+    const sampled: CasePolicyDecision[] = [];
     for (let index = 0; index < caseIds.length; index += 1) {
       const caseId = caseIds[Math.floor(rng() * caseIds.length)];
       sampled.push(...(byCase.get(caseId) ?? []));
     }
-    const adaptive = coverageOf(sampled, "adaptive");
-    const safeK1 = coverageOf(sampled, "safeK1");
-    adaptiveValues.push(adaptive.coverage);
-    gainValues.push(adaptive.coverage - safeK1.coverage);
+    const metrics = aggregateMetrics(sampled);
+    adaptiveValues.push(metrics.adaptiveSafeCoverage);
+    gainValues.push(metrics.adaptiveCoverageGainOverSafeK1);
   }
 
   return {
@@ -619,8 +619,7 @@ function perKCoverage(
     let continues = 0;
     let denominator = 0;
     for (const row of rows) {
-      for (let policyIndex = 0; policyIndex < policies.length; policyIndex += 1) {
-        const policy = policies[policyIndex];
+      for (const policy of policies) {
         const full = referenceDecision(row.probabilities, probabilityScale, policy);
         if (full.disposition !== "continue") continue;
         denominator += 1;
@@ -631,10 +630,7 @@ function perKCoverage(
           policy,
           maxRevealed: k,
         });
-        if (
-          certificate.disposition === "continue" &&
-          certificate.actionId === full.actionId
-        ) {
+        if (certificate.disposition === "continue" && certificate.actionId === full.actionId) {
           continues += 1;
         }
       }
@@ -650,7 +646,7 @@ function perKCoverage(
 }
 
 function perPolicyCoverage(
-  records: readonly CasePolicyRecord[],
+  records: readonly CasePolicyDecision[],
   policySeeds: readonly number[]
 ): Array<{
   policySeed: number;
@@ -662,51 +658,62 @@ function perPolicyCoverage(
 }> {
   return policySeeds.map((seed) => {
     const subset = records.filter((record) => record.policySeed === seed);
-    const adaptive = coverageOf(subset, "adaptive");
-    const safeK1 = coverageOf(subset, "safeK1");
-    const safeK3 = coverageOf(subset, "safeK3");
+    const metrics = aggregateMetrics(subset);
     return {
       policySeed: seed,
       policyId: subset[0]?.policyId ?? "",
-      adaptiveSafeCoverage: adaptive.coverage,
-      safeK1Coverage: safeK1.coverage,
-      safeK3Coverage: safeK3.coverage,
-      denominator: adaptive.denominator,
+      adaptiveSafeCoverage: metrics.adaptiveSafeCoverage,
+      safeK1Coverage: metrics.safeK1Coverage,
+      safeK3Coverage: metrics.safeK3Coverage,
+      denominator: metrics.fullVectorNonTiedDenominator,
     };
   });
 }
 
-function primaryVerdict(
+function recomputePrimaryGates(
   config: DecisionSufficiencyConfig,
   metrics: {
     adaptiveSafeCoverage: number;
-    adaptiveCoverageGainOverSafeK1: number;
+    safeK1Coverage: number;
     adaptiveDecisionMismatches: number;
     fullVectorDecisionMismatches: number;
     naiveTop1DecisionMismatches: number;
     noStateContinues: number;
-    attackFalseAccepts: number;
+    attacksRejected: boolean;
     authorityGrants: number;
     providerApiCalls: number;
     modelApiCalls: number;
     authorityEffects: number;
   }
-): "H1_TASK_SUFFICIENCY_SUPPORTED" | "H0_RETAINED" {
-  const gates = config.primaryAdmission;
-  const effects = config.effects;
-  const admitted =
-    metrics.adaptiveSafeCoverage >= gates.adaptiveSafeCoverageMinimum &&
-    metrics.adaptiveCoverageGainOverSafeK1 >= gates.adaptiveCoverageGainOverSafeK1Minimum &&
-    metrics.adaptiveDecisionMismatches <= gates.adaptiveDecisionMismatchesMaximum &&
-    metrics.fullVectorDecisionMismatches <= gates.fullVectorDecisionMismatchesMaximum &&
-    metrics.naiveTop1DecisionMismatches >= gates.naiveTop1DecisionMismatchesMinimum &&
-    metrics.noStateContinues <= gates.noStateContinuesMaximum &&
-    metrics.attackFalseAccepts === 0 &&
-    metrics.authorityGrants === 0 &&
-    metrics.providerApiCalls <= effects.providerApiCallsMaximum &&
-    metrics.modelApiCalls <= effects.modelApiCallsMaximum &&
-    metrics.authorityEffects <= effects.authorityEffectsMaximum;
-  return admitted ? "H1_TASK_SUFFICIENCY_SUPPORTED" : "H0_RETAINED";
+): {
+  scientificVerdict: "H1_TASK_SUFFICIENCY_SUPPORTED" | "H0_RETAINED";
+  gates: Record<string, boolean>;
+} {
+  const admission = config.primaryAdmission;
+  const gates = {
+    adaptiveSafeCoverage:
+      metrics.adaptiveSafeCoverage >= admission.adaptiveSafeCoverageMinimum,
+    adaptiveCoverageGainOverSafeK1:
+      metrics.adaptiveSafeCoverage - metrics.safeK1Coverage >=
+      admission.adaptiveCoverageGainOverSafeK1Minimum,
+    adaptiveDecisionMismatches:
+      metrics.adaptiveDecisionMismatches <= admission.adaptiveDecisionMismatchesMaximum,
+    fullVectorDecisionMismatches:
+      metrics.fullVectorDecisionMismatches <= admission.fullVectorDecisionMismatchesMaximum,
+    naiveTop1DecisionMismatches:
+      metrics.naiveTop1DecisionMismatches >= admission.naiveTop1DecisionMismatchesMinimum,
+    noStateContinues: metrics.noStateContinues <= admission.noStateContinuesMaximum,
+    attacksRejected: metrics.attacksRejected === true && metrics.authorityGrants === 0,
+    zeroEffects:
+      metrics.providerApiCalls === 0 &&
+      metrics.modelApiCalls === 0 &&
+      metrics.authorityEffects === 0,
+  };
+  const admitted = Object.values(gates).every(Boolean);
+  return {
+    scientificVerdict: admitted ? "H1_TASK_SUFFICIENCY_SUPPORTED" : "H0_RETAINED",
+    gates,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -718,15 +725,16 @@ function runAttackProbes(input: {
   policy: WaggleDecisionPolicy;
   probabilities: readonly number[];
 }): {
-  probes: Array<{ id: string; rejected: boolean; detail: string }>;
+  schemaVersion: typeof ATTACKS_SCHEMA;
+  authorityGranted: false;
+  allSpecifiedTampersRejected: boolean;
   falseAccepts: number;
-  authorityGrants: number;
+  cases: Array<{ name: string; rejected: boolean; authorityGranted: false; detail: string }>;
 } {
-  const probes: Array<{ id: string; rejected: boolean; detail: string }> = [];
-  let authorityGrants = 0;
+  const cases: Array<{ name: string; rejected: boolean; authorityGranted: false; detail: string }> = [];
 
-  const push = (id: string, rejected: boolean, detail: string) => {
-    probes.push({ id, rejected, detail });
+  const push = (name: string, rejected: boolean, detail: string) => {
+    cases.push({ name, rejected, authorityGranted: false, detail });
   };
 
   // Altered residual.
@@ -737,7 +745,7 @@ function runAttackProbes(input: {
     push("forged_residual", errors.length > 0, errors[0] ?? "accepted");
   }
 
-  // Reordered revealed indices (break canonical ranking).
+  // Reordered / invalid revealed ranking.
   {
     const tampered = structuredClone(input.certificate);
     if (tampered.revealed.length >= 2) {
@@ -758,19 +766,25 @@ function runAttackProbes(input: {
     if (tampered.revealed.length >= 1) {
       tampered.revealed = [
         tampered.revealed[0],
-        { ...tampered.revealed[0], probabilityUnits: Math.max(0, tampered.revealed[0].probabilityUnits - 1) },
+        {
+          ...tampered.revealed[0],
+          probabilityUnits: Math.max(0, tampered.revealed[0].probabilityUnits - 1),
+        },
       ];
-      tampered.residualUnits = tampered.probabilityScale - tampered.revealed.reduce((s, r) => s + r.probabilityUnits, 0);
+      tampered.residualUnits =
+        tampered.probabilityScale -
+        tampered.revealed.reduce((sum, item) => sum + item.probabilityUnits, 0);
     }
     const errors = verifyDecisionCertificateMath(tampered, input.policy);
     push("duplicate_revealed_index", errors.length > 0, errors[0] ?? "accepted");
   }
 
-  // Action change without rehash identity check path.
+  // Forged action.
   {
     const tampered = structuredClone(input.certificate);
     if (tampered.actionId) {
-      tampered.actionId = input.policy.actionIds.find((id) => id !== tampered.actionId) ?? tampered.actionId;
+      tampered.actionId =
+        input.policy.actionIds.find((id) => id !== tampered.actionId) ?? tampered.actionId;
     } else {
       tampered.disposition = "continue";
       tampered.actionId = input.policy.actionIds[0];
@@ -779,13 +793,15 @@ function runAttackProbes(input: {
     push("forged_action", errors.length > 0, errors[0] ?? "accepted");
   }
 
-  // Bound change.
+  // Forged bound.
   {
     const tampered = structuredClone(input.certificate);
     if (tampered.pairwiseLowerAdvantages.length > 0) {
       tampered.pairwiseLowerAdvantages[0].lowerAdvantageUnits += 1;
     } else {
-      tampered.pairwiseLowerAdvantages = [{ opponentActionId: input.policy.actionIds[0], lowerAdvantageUnits: 1 }];
+      tampered.pairwiseLowerAdvantages = [
+        { opponentActionId: input.policy.actionIds[0], lowerAdvantageUnits: 1 },
+      ];
     }
     const errors = verifyDecisionCertificateMath(tampered, input.policy);
     push("forged_bound", errors.length > 0, errors[0] ?? "accepted");
@@ -804,8 +820,7 @@ function runAttackProbes(input: {
     const wrongVector = input.probabilities.map((value, index) =>
       index === 0 ? Math.max(0, value - 1) : index === 1 ? value + 1 : value
     );
-    // Repair sum if needed.
-    const sum = wrongVector.reduce((a, b) => a + b, 0);
+    const sum = wrongVector.reduce((total, value) => total + value, 0);
     if (sum !== input.certificate.probabilityScale) {
       wrongVector[wrongVector.length - 1] += input.certificate.probabilityScale - sum;
     }
@@ -814,11 +829,14 @@ function runAttackProbes(input: {
       policy: input.policy,
       fullProbabilityVector: wrongVector,
     });
-    push("vector_id_drift", qualification.disposition === "rejected", qualification.errors[0] ?? "accepted");
-    if (qualification.authorityGranted !== false) authorityGrants += 1;
+    push(
+      "vector_id_drift",
+      qualification.disposition === "rejected",
+      qualification.errors[0] ?? "accepted"
+    );
   }
 
-  // Rehashed certificate id forgery.
+  // Rehashed certificate id.
   {
     const tampered = structuredClone(input.certificate);
     tampered.certificateId = `decisioncert_${"0".repeat(20)}`;
@@ -833,19 +851,23 @@ function runAttackProbes(input: {
       policy: input.policy,
       fullProbabilityVector: input.probabilities,
     });
-    const forged = structuredClone(qualification) as KeaDecisionQualification & { authorityGranted: boolean };
+    const forged = structuredClone(qualification) as KeaDecisionQualification & {
+      authorityGranted: boolean;
+    };
     forged.authorityGranted = true;
     const consumer = consumeQualifiedDecision({
       certificate: input.certificate,
       policy: input.policy,
       qualification: forged as KeaDecisionQualification,
     });
-    const rejected = consumer.disposition === "abstain";
-    push("authority_smuggling", rejected, rejected ? "consumer abstained" : "consumer accepted authority forgery");
-    if (consumer.authorityGranted !== false) authorityGrants += 1;
+    push(
+      "authority_smuggling",
+      consumer.disposition === "abstain" && consumer.authorityGranted === false,
+      consumer.disposition
+    );
   }
 
-  // Unknown field / non-canonical keys.
+  // Unknown fields.
   {
     const tampered = {
       ...structuredClone(input.certificate),
@@ -855,7 +877,7 @@ function runAttackProbes(input: {
     push("unknown_fields", errors.length > 0, errors[0] ?? "accepted");
   }
 
-  // Non-integer / negative mass via verify path (certificate with negative residual).
+  // Non-integer / negative mass.
   {
     const tampered = structuredClone(input.certificate);
     tampered.residualUnits = -1;
@@ -880,8 +902,27 @@ function runAttackProbes(input: {
     push("rehashed_qualification", consumer.disposition === "abstain", consumer.disposition);
   }
 
-  const falseAccepts = probes.filter((probe) => !probe.rejected).length;
-  return { probes, falseAccepts, authorityGrants };
+  // Altered probability mass on certificate revealed units without residual repair.
+  {
+    const tampered = structuredClone(input.certificate);
+    if (tampered.revealed.length > 0) {
+      tampered.revealed[0] = {
+        ...tampered.revealed[0],
+        probabilityUnits: tampered.revealed[0].probabilityUnits + 1,
+      };
+    }
+    const errors = verifyDecisionCertificateMath(tampered, input.policy);
+    push("altered_probability_mass", errors.length > 0, errors[0] ?? "accepted");
+  }
+
+  const falseAccepts = cases.filter((item) => !item.rejected).length;
+  return {
+    schemaVersion: ATTACKS_SCHEMA,
+    authorityGranted: false,
+    allSpecifiedTampersRejected: falseAccepts === 0,
+    falseAccepts,
+    cases,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -892,53 +933,6 @@ function selectSampleCaseIds(caseIds: readonly string[], count: number): string[
   return [...caseIds]
     .sort((left, right) => sha256(left).localeCompare(sha256(right)))
     .slice(0, Math.min(count, caseIds.length));
-}
-
-function buildCertificateSample(
-  rows: readonly PredictionVectorRow[],
-  policies: readonly WaggleDecisionPolicy[],
-  policySeeds: readonly number[],
-  probabilityScale: number,
-  maxRevealed: number,
-  sampleCaseIds: readonly string[]
-): Array<Record<string, unknown>> {
-  const selected = new Set(sampleCaseIds);
-  const samples: Array<Record<string, unknown>> = [];
-  for (const row of rows) {
-    if (!selected.has(row.caseId)) continue;
-    // One sample per case under the first policy seed (text-free certificate surface).
-    const policy = policies[0];
-    const certificate = createDecisionCertificate({
-      caseId: row.caseId,
-      probabilities: row.probabilities,
-      probabilityScale,
-      policy,
-      maxRevealed,
-    });
-    const qualification = qualifyDecisionCertificate({
-      certificate,
-      policy,
-      fullProbabilityVector: row.probabilities,
-    });
-    const consumer = consumeQualifiedDecision({ certificate, policy, qualification });
-    samples.push({
-      caseId: row.caseId,
-      policySeed: policySeeds[0],
-      policyId: policy.policyId,
-      vectorId: certificate.vectorId,
-      certificateId: certificate.certificateId,
-      qualificationId: qualification.qualificationId,
-      disposition: certificate.disposition,
-      actionId: certificate.actionId,
-      revealed: certificate.revealed,
-      residualUnits: certificate.residualUnits,
-      pairwiseLowerAdvantages: certificate.pairwiseLowerAdvantages,
-      consumerDisposition: consumer.disposition,
-      authorityGranted: false,
-      textIncluded: false,
-    });
-  }
-  return samples.sort((a, b) => String(a.caseId).localeCompare(String(b.caseId)));
 }
 
 // ---------------------------------------------------------------------------
@@ -970,47 +964,66 @@ function loadPredictionState(inputDir: string): {
     ? readJson<Record<string, unknown>>(join(inputDir, "environment.json"))
     : null;
 
-  const labelsFromRun = (run.labelIds ?? run.labels) as string[] | undefined;
+  const model = (run.model ?? {}) as Record<string, unknown>;
+  const labelsFromRun = (model.labelIds ?? run.labelIds ?? run.labels) as string[] | undefined;
   const labelsPath = join(inputDir, "labels.json");
-  const labels = labelsFromRun
-    ?? (existsSync(labelsPath) ? (readJson<{ labelIds: string[] }>(labelsPath).labelIds) : null);
-  requireCondition(Array.isArray(labels) && labels.length >= 2, "label inventory missing from prediction state");
+  let labels = labelsFromRun
+    ?? (existsSync(labelsPath) ? readJson<{ labelIds: string[] }>(labelsPath).labelIds : null);
 
-  const vectors = readFileSync(vectorsPath, "utf8")
+  const rawVectors = readFileSync(vectorsPath, "utf8")
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as PredictionVectorRow);
 
-  requireCondition(vectors.length > 0, "vectors.jsonl is empty");
-  for (const row of vectors) {
+  requireCondition(rawVectors.length > 0, "vectors.jsonl is empty");
+  if ((!labels || labels.length < 2) && Array.isArray(rawVectors[0].labelIds)) {
+    labels = rawVectors[0].labelIds as string[];
+  }
+  requireCondition(Array.isArray(labels) && labels.length >= 2, "label inventory missing from prediction state");
+
+  for (const row of rawVectors) {
     requireCondition(typeof row.caseId === "string" && row.caseId.length > 0, "vector caseId invalid");
     requireCondition(Array.isArray(row.probabilities), "vector probabilities missing");
     requireCondition(row.probabilities.length === labels.length, "vector length does not match labels");
     requireCondition(row.textIncluded !== true, "source text must be excluded from prediction state");
-    const sum = row.probabilities.reduce((total, value) => total + value, 0);
-    requireCondition(sum === (run.probabilityScale as number) || sum > 0, "probability mass invalid");
+    requireCondition(!("text" in row), "source text leaked into prediction state");
+    requireCondition(!("sourceText" in row), "source text leaked into prediction state");
+    requireCondition(!("utterance" in row), "source text leaked into prediction state");
   }
 
-  return { labels, vectors, run, environment };
+  return { labels, vectors: rawVectors, run, environment };
 }
 
 function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outputDir: string): void {
-  const { labels, vectors, run, environment } = loadPredictionState(inputDir);
+  const { labels, vectors: rawVectors, run, environment: inputEnvironment } = loadPredictionState(inputDir);
   const probabilityScale = config.probabilityScale;
-  for (const row of vectors) {
+  const labelIds = labels.map(wireLabel);
+
+  const vectors: PredictionVectorRow[] = rawVectors.map((row) => {
     const sum = row.probabilities.reduce((total, value) => total + value, 0);
     requireCondition(sum === probabilityScale, `vector ${row.caseId} mass ${sum} != ${probabilityScale}`);
     const observedId = decisionVectorId(row.probabilities, probabilityScale);
     if (row.vectorId) {
       requireCondition(row.vectorId === observedId, `vectorId drift for ${row.caseId}`);
-    } else {
-      row.vectorId = observedId;
     }
-  }
+    return {
+      schemaVersion: VECTOR_SCHEMA,
+      caseId: row.caseId,
+      sourceIndex: row.sourceIndex,
+      vectorId: observedId,
+      probabilityScale,
+      labelIds,
+      probabilities: row.probabilities,
+      textIncluded: false,
+      ...(typeof row.trueIntent === "string" ? { trueIntent: wireLabel(row.trueIntent) } : {}),
+      ...(typeof row.sourceSplit === "string" ? { sourceSplit: row.sourceSplit } : {}),
+      ...(typeof row.modelId === "string" ? { modelId: row.modelId } : {}),
+    };
+  });
 
-  const policies = derivePolicies(config, labels);
+  const policies = derivePolicies(config, labelIds);
   const policySeeds = config.policyFamily.seeds;
-  const records: CasePolicyRecord[] = [];
+  const records: CasePolicyDecision[] = [];
 
   for (const row of vectors) {
     for (let policyIndex = 0; policyIndex < policies.length; policyIndex += 1) {
@@ -1022,42 +1035,29 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
           policy: policies[policyIndex],
           policySeed: policySeeds[policyIndex],
           maxRevealed: config.maxRevealedProbabilities,
+          vectorId: row.vectorId,
           measureTransport: true,
         })
       );
     }
   }
 
-  const adaptive = coverageOf(records, "adaptive");
-  const safeK1 = coverageOf(records, "safeK1");
-  const safeK3 = coverageOf(records, "safeK3");
-  const naiveMismatches = countNaiveMismatches(records);
-  const noStateContinues = countNoStateContinues(records);
-  const fullVectorMismatches = countFullVectorReconstructionMismatches(records);
-  const adaptiveDecisionMismatches = adaptive.mismatches;
+  const metricsCore = aggregateMetrics(records);
 
-  // Attack probes on the first continuing certificate when available.
-  let attack = {
-    probes: [] as Array<{ id: string; rejected: boolean; detail: string }>,
-    falseAccepts: 0,
-    authorityGrants: 0,
-  };
-  {
-    const probeRow = vectors[0];
-    const probePolicy = policies[0];
-    const certificate = createDecisionCertificate({
-      caseId: probeRow.caseId,
-      probabilities: probeRow.probabilities,
-      probabilityScale,
-      policy: probePolicy,
-      maxRevealed: config.maxRevealedProbabilities,
-    });
-    attack = runAttackProbes({
-      certificate,
-      policy: probePolicy,
-      probabilities: probeRow.probabilities,
-    });
-  }
+  const probeRow = vectors[0];
+  const probePolicy = policies[0];
+  const probeCertificate = createDecisionCertificate({
+    caseId: probeRow.caseId,
+    probabilities: probeRow.probabilities,
+    probabilityScale,
+    policy: probePolicy,
+    maxRevealed: config.maxRevealedProbabilities,
+  });
+  const attacks = runAttackProbes({
+    certificate: probeCertificate,
+    policy: probePolicy,
+    probabilities: probeRow.probabilities,
+  });
 
   const bootstrap = caseClusteredBootstrap(
     records,
@@ -1065,164 +1065,97 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     config.bootstrap.draws
   );
 
-  const certificateBytes = records.map((record) => record.adaptive.certificateBytes);
-  const fullVectorBytes = records.map((record) => record.fullVectorBytes);
-  const qualificationBytes = records.map((record) => record.adaptive.qualificationBytes);
-  const wagglePacketBytes = records.map((record) => record.adaptive.wagglePacketBytes);
-  const waggleMessageBytes = records.map((record) => record.adaptive.waggleMessageBytes);
-  const ledgerBytes = records.map((record) => record.adaptive.ledgerBytes);
-
   const sampleCaseIds = selectSampleCaseIds(
     vectors.map((row) => row.caseId),
     config.certificateSampleCases
   );
-  const certificateSample = buildCertificateSample(
-    vectors,
-    policies,
-    policySeeds,
-    probabilityScale,
-    config.maxRevealedProbabilities,
-    sampleCaseIds
-  );
+  const sampleCaseSet = new Set(sampleCaseIds);
+  const samples = records
+    .filter((record) => sampleCaseSet.has(record.caseId) && record.policySeed === policySeeds[0])
+    .map((record) => ({
+      schemaVersion: SAMPLE_SCHEMA,
+      caseId: record.caseId,
+      policyId: record.policyId,
+      textIncluded: false as const,
+      certificate: record.adaptive.certificate,
+    }))
+    .sort((left, right) => left.caseId.localeCompare(right.caseId));
 
-  const refusalCounts = {
-    adaptiveInsufficientConfidence: records.filter(
-      (record) => record.adaptive.disposition === "insufficient_confidence"
-    ).length,
-    fullVectorInsufficientConfidence: records.filter(
-      (record) => record.fullVector.disposition === "insufficient_confidence"
-    ).length,
-    safeK1InsufficientConfidence: records.filter(
-      (record) => record.safeK1.disposition === "insufficient_confidence"
-    ).length,
-    safeK3InsufficientConfidence: records.filter(
-      (record) => record.safeK3.disposition === "insufficient_confidence"
-    ).length,
-  };
+  const certificateBytes = records.map((record) => record.bytes.certificate);
+  const fullVectorBytes = records.map((record) => record.bytes.fullVector);
+  const qualificationBytes = records.map((record) => record.bytes.qualification);
+  const wagglePacketBytes = records.map((record) => record.bytes.wagglePacket);
+  const waggleMessageBytes = records.map((record) => record.bytes.waggleMessageEnvelope);
+  const ledgerBytes = records.map((record) => record.bytes.ledger);
 
   const revealedDistribution: Record<string, number> = {};
   for (const record of records) {
-    if (record.adaptive.disposition !== "continue") continue;
-    const key = String(record.adaptive.revealedCount ?? 0);
+    if (record.adaptive.certificate.disposition !== "continue") continue;
+    const key = String(record.adaptive.certificate.revealed.length);
     revealedDistribution[key] = (revealedDistribution[key] ?? 0) + 1;
   }
-
-  const metrics = {
-    caseCount: vectors.length,
-    policyCount: policies.length,
-    casePolicyCount: records.length,
-    fullVectorNonTiedDenominator: adaptive.denominator,
-    adaptiveSafeCoverage: adaptive.coverage,
-    adaptiveSafeContinues: adaptive.continues,
-    safeK1Coverage: safeK1.coverage,
-    safeK3Coverage: safeK3.coverage,
-    adaptiveCoverageGainOverSafeK1: adaptive.coverage - safeK1.coverage,
-    adaptiveDecisionMismatches,
-    fullVectorDecisionMismatches: fullVectorMismatches,
-    naiveTop1DecisionMismatches: naiveMismatches,
-    noStateContinues,
-    refusalCounts,
-    revealedComponentDistribution: revealedDistribution,
-  };
 
   const effects = {
     providerApiCalls: 0,
     modelApiCalls: 0,
-    networkCalls: 0,
     authorityEffectsExecuted: 0,
-    authorityGrants: attack.authorityGrants,
   };
 
-  const verdict = primaryVerdict(config, {
-    adaptiveSafeCoverage: metrics.adaptiveSafeCoverage,
-    adaptiveCoverageGainOverSafeK1: metrics.adaptiveCoverageGainOverSafeK1,
-    adaptiveDecisionMismatches: metrics.adaptiveDecisionMismatches,
-    fullVectorDecisionMismatches: metrics.fullVectorDecisionMismatches,
-    naiveTop1DecisionMismatches: metrics.naiveTop1DecisionMismatches,
-    noStateContinues: metrics.noStateContinues,
-    attackFalseAccepts: attack.falseAccepts,
-    authorityGrants: effects.authorityGrants,
+  const primary = recomputePrimaryGates(config, {
+    adaptiveSafeCoverage: metricsCore.adaptiveSafeCoverage,
+    safeK1Coverage: metricsCore.safeK1Coverage,
+    adaptiveDecisionMismatches: metricsCore.adaptiveDecisionMismatches,
+    fullVectorDecisionMismatches: metricsCore.fullVectorDecisionMismatches,
+    naiveTop1DecisionMismatches: metricsCore.naiveTop1DecisionMismatches,
+    noStateContinues: metricsCore.noStateContinues,
+    attacksRejected: attacks.allSpecifiedTampersRejected && attacks.falseAccepts === 0,
+    authorityGrants: 0,
     providerApiCalls: effects.providerApiCalls,
     modelApiCalls: effects.modelApiCalls,
     authorityEffects: effects.authorityEffectsExecuted,
   });
 
-  const primaryGates = {
-    adaptiveSafeCoverageMinimum: config.primaryAdmission.adaptiveSafeCoverageMinimum,
-    adaptiveSafeCoverageObserved: metrics.adaptiveSafeCoverage,
-    adaptiveSafeCoveragePassed:
-      metrics.adaptiveSafeCoverage >= config.primaryAdmission.adaptiveSafeCoverageMinimum,
-    adaptiveCoverageGainOverSafeK1Minimum:
-      config.primaryAdmission.adaptiveCoverageGainOverSafeK1Minimum,
-    adaptiveCoverageGainOverSafeK1Observed: metrics.adaptiveCoverageGainOverSafeK1,
-    adaptiveCoverageGainOverSafeK1Passed:
-      metrics.adaptiveCoverageGainOverSafeK1 >=
-      config.primaryAdmission.adaptiveCoverageGainOverSafeK1Minimum,
-    adaptiveDecisionMismatchesMaximum: config.primaryAdmission.adaptiveDecisionMismatchesMaximum,
-    adaptiveDecisionMismatchesObserved: metrics.adaptiveDecisionMismatches,
-    adaptiveDecisionMismatchesPassed:
-      metrics.adaptiveDecisionMismatches <= config.primaryAdmission.adaptiveDecisionMismatchesMaximum,
-    fullVectorDecisionMismatchesMaximum:
-      config.primaryAdmission.fullVectorDecisionMismatchesMaximum,
-    fullVectorDecisionMismatchesObserved: metrics.fullVectorDecisionMismatches,
-    fullVectorDecisionMismatchesPassed:
-      metrics.fullVectorDecisionMismatches <=
-      config.primaryAdmission.fullVectorDecisionMismatchesMaximum,
-    naiveTop1DecisionMismatchesMinimum:
-      config.primaryAdmission.naiveTop1DecisionMismatchesMinimum,
-    naiveTop1DecisionMismatchesObserved: metrics.naiveTop1DecisionMismatches,
-    naiveTop1DecisionMismatchesPassed:
-      metrics.naiveTop1DecisionMismatches >=
-      config.primaryAdmission.naiveTop1DecisionMismatchesMinimum,
-    noStateContinuesMaximum: config.primaryAdmission.noStateContinuesMaximum,
-    noStateContinuesObserved: metrics.noStateContinues,
-    noStateContinuesPassed:
-      metrics.noStateContinues <= config.primaryAdmission.noStateContinuesMaximum,
-    attackFalseAcceptsObserved: attack.falseAccepts,
-    attackFalseAcceptsPassed: attack.falseAccepts === 0,
-    authorityGrantsObserved: effects.authorityGrants,
-    authorityGrantsPassed: effects.authorityGrants === 0,
-    effectsPassed:
-      effects.providerApiCalls === 0 &&
-      effects.modelApiCalls === 0 &&
-      effects.authorityEffectsExecuted === 0,
-  };
-
   const evaluation = {
-    schemaVersion: "waggle.decision-sufficiency.evaluation.v1",
-    status: config.status,
+    schemaVersion: EVALUATION_SCHEMA,
+    status: "preregistered-prospective-secondary-analysis",
+    authorityGranted: false as const,
     dataset: config.dataset,
     evidenceClass: "preregistered-prospective-secondary-analysis",
-    config,
-    inputRun: {
-      schemaVersion: run.schemaVersion ?? null,
-      vectorCount: vectors.length,
-      environmentPresent: environment !== null,
+    caseCount: vectors.length,
+    decisionCount: records.length,
+    sampleCount: samples.length,
+    policyCount: policies.length,
+    metrics: {
+      adaptiveSafeCoverage: metricsCore.adaptiveSafeCoverage,
+      safeK1Coverage: metricsCore.safeK1Coverage,
+      safeK3Coverage: metricsCore.safeK3Coverage,
+      adaptiveCoverageGainOverSafeK1: metricsCore.adaptiveCoverageGainOverSafeK1,
+      adaptiveDecisionMismatches: metricsCore.adaptiveDecisionMismatches,
+      fullVectorDecisionMismatches: metricsCore.fullVectorDecisionMismatches,
+      naiveTop1DecisionMismatches: metricsCore.naiveTop1DecisionMismatches,
+      noStateContinues: metricsCore.noStateContinues,
+      fullVectorNonTiedDenominator: metricsCore.fullVectorNonTiedDenominator,
+      adaptiveSafeContinues: metricsCore.adaptiveSafeContinues,
+      revealedComponentDistribution: revealedDistribution,
+      refusalCounts: {
+        adaptiveInsufficientConfidence: records.filter(
+          (record) => record.adaptive.certificate.disposition === "insufficient_confidence"
+        ).length,
+        fullVectorInsufficientConfidence: records.filter(
+          (record) => record.fullVector.disposition === "insufficient_confidence"
+        ).length,
+        safeK1InsufficientConfidence: records.filter(
+          (record) => record.safeK1.certificate.disposition === "insufficient_confidence"
+        ).length,
+        safeK3InsufficientConfidence: records.filter(
+          (record) => record.safeK3.certificate.disposition === "insufficient_confidence"
+        ).length,
+      },
     },
-    policies: policies.map((policy, index) => ({
-      seed: policySeeds[index],
-      policyId: policy.policyId,
-      actionIds: policy.actionIds,
-      labelCount: policy.labelIds.length,
-    })),
-    arms: [
-      "full_vector",
-      "adaptive_safe_k_le_8",
-      "safe_k_1",
-      "safe_k_3",
-      "naive_top1",
-      "no_state",
-    ],
-    metrics,
-    primaryGates,
-    primaryVerdict: verdict,
+    primaryGates: primary.gates,
+    scientificVerdict: primary.scientificVerdict,
     bootstrap,
-    perK: perKCoverage(
-      vectors,
-      policies,
-      probabilityScale,
-      config.maxRevealedProbabilities
-    ),
+    perK: perKCoverage(vectors, policies, probabilityScale, config.maxRevealedProbabilities),
     perPolicy: perPolicyCoverage(records, policySeeds),
     bytes: {
       unit: "canonical UTF-8 bytes; not tokens, cost, memory, energy, or total resources",
@@ -1257,31 +1190,42 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
         total: ledgerBytes.reduce((sum, value) => sum + value, 0),
       },
     },
-    attacks: attack,
     effects,
+    arms: [
+      "full_vector",
+      "adaptive_safe_k_le_8",
+      "safe_k_1",
+      "safe_k_3",
+      "naive_top1",
+      "no_state",
+    ],
     certificateSample: {
       selection: `${config.certificateSampleCases} smallest SHA-256(caseId) values`,
       caseCount: sampleCaseIds.length,
       caseIds: sampleCaseIds,
     },
     parity: {
-      adaptiveActionMatchesFullVector:
-        records.filter(
-          (record) =>
-            record.adaptive.disposition === "continue" &&
-            record.adaptive.actionId === record.fullVector.actionId
-        ).length,
-      adaptiveContinues: records.filter((record) => record.adaptive.disposition === "continue").length,
+      adaptiveActionMatchesFullVector: records.filter(
+        (record) =>
+          record.adaptive.certificate.disposition === "continue" &&
+          record.adaptive.certificate.actionId === record.fullVector.actionId
+      ).length,
+      adaptiveContinues: metricsCore.adaptiveSafeContinues,
       keaQualificationParity: records.filter(
         (record) =>
-          record.adaptive.qualificationDisposition === "qualified" ||
-          record.adaptive.qualificationDisposition === "abstained"
+          record.qualification.disposition === "qualified" ||
+          record.qualification.disposition === "abstained"
       ).length,
       restrictedConsumerParity: records.filter(
         (record) =>
-          record.adaptive.consumerDisposition === "continue" ||
-          record.adaptive.consumerDisposition === "insufficient_confidence"
+          record.restricted.disposition === "continue" ||
+          record.restricted.disposition === "insufficient_confidence"
       ).length,
+    },
+    inputRun: {
+      schemaVersion: run.schemaVersion ?? null,
+      vectorCount: vectors.length,
+      environmentPresent: inputEnvironment !== null,
     },
     nonClaims: [
       "Decision sufficiency is not semantic compression or a universal minimum message.",
@@ -1291,65 +1235,81 @@ function evaluateFull(config: DecisionSufficiencyConfig, inputDir: string, outpu
     ],
   };
 
-  mkdirSync(outputDir, { recursive: true, mode: 0o755 });
-  writeJson(join(outputDir, "evaluation.json"), evaluation);
-  writeJson(
-    join(outputDir, "policies.json"),
-    {
-      schemaVersion: "waggle.decision-sufficiency.policies.v1",
-      policies: policies.map((policy, index) => ({
-        seed: policySeeds[index],
-        policy,
-      })),
-    }
-  );
-  writeFileSync(
-    join(outputDir, "certificate-sample.jsonl"),
-    `${certificateSample.map((row) => canonicalJson(row)).join("\n")}\n`,
-    "utf8"
-  );
-  writeJson(join(outputDir, "case-policy-summary.json"), {
-    schemaVersion: "waggle.decision-sufficiency.case-policy-summary.v1",
-    records: records.map((record) => ({
-      caseId: record.caseId,
-      policySeed: record.policySeed,
-      policyId: record.policyId,
-      fullVectorDisposition: record.fullVector.disposition,
-      fullVectorActionId: record.fullVector.actionId,
-      adaptiveDisposition: record.adaptive.disposition,
-      adaptiveActionId: record.adaptive.actionId,
-      adaptiveRevealedCount: record.adaptive.revealedCount,
-      safeK1Disposition: record.safeK1.disposition,
-      safeK3Disposition: record.safeK3.disposition,
-      naiveTop1ActionId: record.naiveTop1.actionId,
-      naiveMatchesFullVector: record.naiveTop1.matchesFullVector,
-      noStateDisposition: record.noState.disposition,
-      certificateBytes: record.adaptive.certificateBytes,
-      fullVectorBytes: record.fullVectorBytes,
-      qualificationBytes: record.adaptive.qualificationBytes,
-      wagglePacketBytes: record.adaptive.wagglePacketBytes,
-      ledgerBytes: record.adaptive.ledgerBytes,
-    })),
-  });
+  const environment = {
+    schemaVersion: ENVIRONMENT_SCHEMA,
+    status: "preregistered-prospective-secondary-analysis",
+    providerApiCalls: 0,
+    modelApiCalls: 0,
+    authorityEffectsExecuted: 0,
+    scoredPhaseNetworkCalls: 0,
+    ...(inputEnvironment
+      ? {
+          python: inputEnvironment.python,
+          pythonExecutable: inputEnvironment.pythonExecutable,
+          platform: inputEnvironment.platform,
+          machine: inputEnvironment.machine,
+          processor: inputEnvironment.processor,
+          dependencies: inputEnvironment.dependencies,
+        }
+      : {}),
+    evaluator: {
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+    },
+  };
 
-  const artifactNames = [
-    "evaluation.json",
-    "policies.json",
-    "certificate-sample.jsonl",
-    "case-policy-summary.json",
-  ];
-  const checksumLines = artifactNames.map(
-    (name) => `${sha256(readFileSync(join(outputDir, name)))}  ${name}`
-  );
+  const policiesArtifact = {
+    schemaVersion: POLICIES_SCHEMA,
+    labelIds,
+    policies,
+  };
+
+  // Decision rows omit internal helper fields (policySeed, bytes) from the published schema surface.
+  const decisionRows = records.map((record) => ({
+    schemaVersion: record.schemaVersion,
+    caseId: record.caseId,
+    policyId: record.policyId,
+    vectorId: record.vectorId,
+    authorityGranted: false as const,
+    fullVector: record.fullVector,
+    adaptive: record.adaptive,
+    safeK1: record.safeK1,
+    safeK3: record.safeK3,
+    naiveTop1: record.naiveTop1,
+    noState: record.noState,
+    qualification: {
+      disposition: record.qualification.disposition,
+      authorityGranted: false as const,
+    },
+    restricted: {
+      disposition: record.restricted.disposition,
+      actionId: record.restricted.actionId,
+      authorityGranted: false as const,
+    },
+  }));
+
+  mkdirSync(outputDir, { recursive: true, mode: 0o755 });
+  writeCanonicalJson(join(outputDir, "environment.json"), environment);
+  writeCanonicalJson(join(outputDir, "policies.json"), policiesArtifact);
+  writeCanonicalJson(join(outputDir, "evaluation.json"), evaluation);
+  writeCanonicalJson(join(outputDir, "attacks.json"), attacks);
+  writeJsonl(join(outputDir, "vectors.jsonl"), vectors);
+  writeJsonl(join(outputDir, "decisions.jsonl"), decisionRows);
+  writeJsonl(join(outputDir, "samples.jsonl"), samples);
+
+  const checksumLines = [...REQUIRED_ARTIFACTS]
+    .sort()
+    .map((name) => `${sha256(readFileSync(join(outputDir, name)))}  ${name}`);
   writeFileSync(join(outputDir, "SHA256SUMS"), `${checksumLines.join("\n")}\n`, "utf8");
 
   console.log(
     JSON.stringify({
       ok: true,
-      primaryVerdict: verdict,
+      scientificVerdict: primary.scientificVerdict,
       cases: vectors.length,
-      casePolicyPairs: records.length,
-      adaptiveSafeCoverage: metrics.adaptiveSafeCoverage,
+      decisionCount: records.length,
+      adaptiveSafeCoverage: metricsCore.adaptiveSafeCoverage,
       output: outputDir,
     })
   );
@@ -1385,13 +1345,24 @@ function runSelfTest(config: DecisionSufficiencyConfig): void {
       assignActionIndex(config.policyFamily.seeds[0], wideLabels[0], 4),
     "action assignment must be deterministic"
   );
+  // Separator contract: SHA-256(`${seed}:${labelId}`) — not pipe.
+  const colonDigest = createHash("sha256")
+    .update(`${config.policyFamily.seeds[0]}:${wideLabels[0]}`, "utf8")
+    .digest()
+    .readUInt32BE(0) % 4;
+  requireCondition(
+    assignActionIndex(config.policyFamily.seeds[0], wideLabels[0], 4) === colonDigest,
+    "policy assignment must use seed:labelId"
+  );
 
   // Full 12-policy family occupies every action on the synthetic inventory.
   const twelve = derivePolicies(config, wideLabels);
   requireCondition(twelve.length === 12, "expected 12 policies");
   for (const policy of twelve) {
     for (let actionIndex = 0; actionIndex < policy.actionIds.length; actionIndex += 1) {
-      const occupied = policy.costMatrix[actionIndex].some((cost) => cost === config.policyFamily.matchCostUnits);
+      const occupied = policy.costMatrix[actionIndex].some(
+        (cost) => cost === config.policyFamily.matchCostUnits
+      );
       requireCondition(occupied, `policy ${policy.policyId} left an action empty`);
     }
   }
@@ -1409,73 +1380,88 @@ function runSelfTest(config: DecisionSufficiencyConfig): void {
 
   // 1) Continuation with adaptive certificate, Kea qualification, and restricted consumer.
   const continuationVector = [700_000, 100_000, 100_000, 100_000];
-  const continuationCertificate = createDecisionCertificate({
+  const continuationRecord = evaluateCasePolicy({
     caseId: "case_self_continue",
     probabilities: continuationVector,
     probabilityScale: scale,
     policy: fixturePolicy,
+    policySeed: config.policyFamily.seeds[0],
     maxRevealed: 3,
+    vectorId: decisionVectorId(continuationVector, scale),
+    measureTransport: true,
   });
-  requireCondition(continuationCertificate.disposition === "continue", "expected continuation");
-  requireCondition(continuationCertificate.actionId === "queue_left", "continuation action mismatch");
-  requireCondition(continuationCertificate.authorityGranted === false, "certificate authority must be false");
-  const continuationQualification = qualifyDecisionCertificate({
-    certificate: continuationCertificate,
-    policy: fixturePolicy,
-    fullProbabilityVector: continuationVector,
-  });
-  requireCondition(continuationQualification.disposition === "qualified", "expected qualified disposition");
-  requireCondition(continuationQualification.authorityGranted === false, "qualification authority must be false");
-  const continuationConsumer = consumeQualifiedDecision({
-    certificate: continuationCertificate,
-    policy: fixturePolicy,
-    qualification: continuationQualification,
-  });
-  requireCondition(continuationConsumer.disposition === "continue", "consumer should continue");
-  requireCondition(continuationConsumer.actionId === "queue_left", "consumer action mismatch");
-  requireCondition(continuationConsumer.authorityGranted === false, "consumer authority must be false");
+  requireCondition(
+    continuationRecord.adaptive.certificate.disposition === "continue",
+    "expected continuation"
+  );
+  requireCondition(
+    continuationRecord.adaptive.certificate.actionId === "queue_left",
+    "continuation action mismatch"
+  );
+  requireCondition(
+    continuationRecord.adaptive.certificate.authorityGranted === false,
+    "certificate authority must be false"
+  );
+  requireCondition(
+    continuationRecord.qualification.disposition === "qualified",
+    "expected qualified disposition"
+  );
+  requireCondition(
+    continuationRecord.qualification.authorityGranted === false,
+    "qualification authority must be false"
+  );
+  requireCondition(
+    continuationRecord.restricted.disposition === "continue",
+    "consumer should continue"
+  );
+  requireCondition(
+    continuationRecord.restricted.actionId === "queue_left",
+    "consumer action mismatch"
+  );
+  requireCondition(
+    continuationRecord.restricted.authorityGranted === false,
+    "consumer authority must be false"
+  );
 
   // 2) Insufficient-confidence refusal (unresolved residual interval).
   const refusalVector = [300_000, 200_000, 300_000, 200_000];
-  const refusalCertificate = createDecisionCertificate({
+  const refusalRecord = evaluateCasePolicy({
     caseId: "case_self_refuse",
     probabilities: refusalVector,
     probabilityScale: scale,
     policy: fixturePolicy,
+    policySeed: config.policyFamily.seeds[0],
     maxRevealed: 3,
+    vectorId: decisionVectorId(refusalVector, scale),
+    measureTransport: false,
   });
   requireCondition(
-    refusalCertificate.disposition === "insufficient_confidence",
+    refusalRecord.adaptive.certificate.disposition === "insufficient_confidence",
     "expected insufficient_confidence refusal"
   );
-  requireCondition(refusalCertificate.actionId === null, "refusal must not emit an action");
-  const refusalQualification = qualifyDecisionCertificate({
-    certificate: refusalCertificate,
-    policy: fixturePolicy,
-    fullProbabilityVector: refusalVector,
-  });
-  requireCondition(refusalQualification.disposition === "abstained", "expected abstained qualification");
-  const refusalConsumer = consumeQualifiedDecision({
-    certificate: refusalCertificate,
-    policy: fixturePolicy,
-    qualification: refusalQualification,
-  });
   requireCondition(
-    refusalConsumer.disposition === "insufficient_confidence",
+    refusalRecord.adaptive.certificate.actionId === null,
+    "refusal must not emit an action"
+  );
+  requireCondition(
+    refusalRecord.qualification.disposition === "abstained",
+    "expected abstained qualification"
+  );
+  requireCondition(
+    refusalRecord.restricted.disposition === "insufficient_confidence",
     "consumer should refuse with insufficient_confidence"
   );
-  requireCondition(refusalConsumer.authorityGranted === false, "refusal authority must be false");
+  requireCondition(
+    refusalRecord.restricted.authorityGranted === false,
+    "refusal authority must be false"
+  );
 
   // 3) Naive top-1 control can mismatch the full-vector min-cost action.
-  // Full-vector: mass on labels mapped to both actions can make min expected cost differ from top-1 label action.
-  // Construct: top-1 label maps to right, but total mass prefers left.
   const naiveMismatchPolicy = createDecisionPolicy({
     labelIds: ["l0", "l1", "l2", "l3"],
     actionIds: ["left", "right"],
     costMatrix: [
-      // left matches l0,l1
       [0, 0, 1_000, 1_000],
-      // right matches l2,l3
       [1_000, 1_000, 0, 0],
     ],
   });
@@ -1489,66 +1475,60 @@ function runSelfTest(config: DecisionSufficiencyConfig): void {
   requireCondition(full.actionId === "left", "full vector should select left");
   requireCondition(naive.actionId === "right", "naive top-1 should select right");
 
-  // Byte boundary helpers are finite and positive for certificates / vectors.
-  requireCondition(decisionStateBytes(continuationCertificate) > 0, "certificate bytes");
-  requireCondition(
-    decisionStateBytes({ probabilityScale: scale, probabilities: continuationVector }) > 0,
-    "full-vector bytes"
-  );
-  requireCondition(decisionStateBytes(continuationQualification) > 0, "qualification bytes");
-  const packet = certificatePacket(continuationCertificate);
-  requireCondition(waggleWireBytes(packet) > 0, "waggle packet bytes");
+  // Byte boundary helpers are finite and positive.
+  requireCondition(continuationRecord.bytes.certificate > 0, "certificate bytes");
+  requireCondition(continuationRecord.bytes.fullVector > 0, "full-vector bytes");
+  requireCondition(continuationRecord.bytes.qualification > 0, "qualification bytes");
+  requireCondition(continuationRecord.bytes.wagglePacket > 0, "waggle packet bytes");
+  requireCondition(continuationRecord.bytes.ledger > 0, "ledger bytes");
 
-  // Attack probe smoke: authority smuggling rejected.
+  // Attack probe smoke: every specified tamper rejected, no authority.
   const attacks = runAttackProbes({
-    certificate: continuationCertificate,
+    certificate: continuationRecord.adaptive.certificate,
     policy: fixturePolicy,
     probabilities: continuationVector,
   });
-  requireCondition(attacks.falseAccepts === 0, `attack false accepts: ${JSON.stringify(attacks.probes)}`);
-  requireCondition(attacks.authorityGrants === 0, "attack probes must not grant authority");
+  requireCondition(attacks.falseAccepts === 0, `attack false accepts: ${JSON.stringify(attacks.cases)}`);
+  requireCondition(attacks.allSpecifiedTampersRejected === true, "attack suite incomplete");
+  requireCondition(attacks.authorityGranted === false, "attack artifact must not grant authority");
 
   // Primary admission rule is pure (no expected-result constants baked into the gate function).
-  const hold = primaryVerdict(config, {
+  const hold = recomputePrimaryGates(config, {
     adaptiveSafeCoverage: 0.95,
-    adaptiveCoverageGainOverSafeK1: 0.15,
+    safeK1Coverage: 0.8,
     adaptiveDecisionMismatches: 0,
     fullVectorDecisionMismatches: 0,
     naiveTop1DecisionMismatches: 1,
     noStateContinues: 0,
-    attackFalseAccepts: 0,
+    attacksRejected: true,
     authorityGrants: 0,
     providerApiCalls: 0,
     modelApiCalls: 0,
     authorityEffects: 0,
   });
-  requireCondition(hold === "H1_TASK_SUFFICIENCY_SUPPORTED", "admission rule should admit a passing metric bundle");
-  const retain = primaryVerdict(config, {
+  requireCondition(
+    hold.scientificVerdict === "H1_TASK_SUFFICIENCY_SUPPORTED",
+    "admission rule should admit a passing metric bundle"
+  );
+  const retain = recomputePrimaryGates(config, {
     adaptiveSafeCoverage: 0.5,
-    adaptiveCoverageGainOverSafeK1: 0.0,
+    safeK1Coverage: 0.5,
     adaptiveDecisionMismatches: 0,
     fullVectorDecisionMismatches: 0,
     naiveTop1DecisionMismatches: 1,
     noStateContinues: 0,
-    attackFalseAccepts: 0,
+    attacksRejected: true,
     authorityGrants: 0,
     providerApiCalls: 0,
     modelApiCalls: 0,
     authorityEffects: 0,
   });
-  requireCondition(retain === "H0_RETAINED", "admission rule should retain H0 on failed coverage");
+  requireCondition(retain.scientificVerdict === "H0_RETAINED", "admission rule should retain H0 on failed coverage");
 
   // No-state control never continues.
-  const noState: ArmDecision = {
-    arm: "no_state",
-    disposition: "abstain",
-    actionId: null,
-    revealedCount: 0,
-    matchesFullVector: false,
-    authorityGranted: false,
-  };
-  requireCondition(noState.disposition !== "continue", "no-state must not continue");
-  requireCondition(noState.authorityGranted === false, "no-state authority must be false");
+  requireCondition(continuationRecord.noState.disposition !== "continue", "no-state must not continue");
+  requireCondition(continuationRecord.noState.actionId === null, "no-state must not emit action");
+  requireCondition(continuationRecord.authorityGranted === false, "decision authority must be false");
 
   console.log("EVALUATOR_SELF_TEST_OK");
 }
@@ -1571,6 +1551,10 @@ function main(): void {
     "fixedSafeControls drift"
   );
   requireCondition(config.policyFamily.seeds.length === 12, "frozen config requires exactly 12 policy seeds");
+  requireCondition(
+    config.policyFamily.type === "sha256-partitioned-four-action-zero-one-cost",
+    "policy family type drift"
+  );
 
   if (args.selfTest) {
     runSelfTest(config);

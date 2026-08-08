@@ -868,6 +868,11 @@ function verifyResultsDirectory(resultsDir, config) {
     Array.isArray(policiesArtifact.labelIds) && policiesArtifact.labelIds.length >= 2,
     "policies.labelIds invalid"
   );
+  // Protocol freezes BANKING77 as a 77-class probability simplex.
+  requireCondition(
+    policiesArtifact.labelIds.length === 77,
+    `policy label denominator drifted: observed ${policiesArtifact.labelIds.length} expected 77`
+  );
   const regenerated = regeneratePolicies(config, policiesArtifact.labelIds);
   policiesArtifact.policies.forEach((policy, index) => {
     assertDecisionPolicy(policy);
@@ -976,6 +981,38 @@ function verifyResultsDirectory(resultsDir, config) {
     requireCondition(row.vectorId === vector.vectorId, `decision vectorId drift for ${row.caseId}`);
     requireCondition(row.authorityGranted === false, "decision row grants authority");
 
+    // Nested control objects are exact-key fail-closed; no free-form smuggling.
+    requireExactKeys(
+      row.fullVector,
+      ["actionId", "disposition"],
+      `decision fullVector ${row.caseId}/${row.policyId}`
+    );
+    requireExactKeys(
+      row.adaptive,
+      ["certificate"],
+      `decision adaptive ${row.caseId}/${row.policyId}`
+    );
+    requireExactKeys(
+      row.safeK1,
+      ["certificate"],
+      `decision safeK1 ${row.caseId}/${row.policyId}`
+    );
+    requireExactKeys(
+      row.safeK3,
+      ["certificate"],
+      `decision safeK3 ${row.caseId}/${row.policyId}`
+    );
+    requireExactKeys(
+      row.naiveTop1,
+      ["actionId", "disposition"],
+      `decision naiveTop1 ${row.caseId}/${row.policyId}`
+    );
+    requireExactKeys(
+      row.noState,
+      ["actionId", "disposition"],
+      `decision noState ${row.caseId}/${row.policyId}`
+    );
+
     const reference = referenceDecision(vector.probabilities, config.probabilityScale, policy);
     requireCondition(
       row.fullVector.disposition === reference.disposition &&
@@ -1030,6 +1067,10 @@ function verifyResultsDirectory(resultsDir, config) {
         maxRevealed: k,
       });
       requireCondition(
+        row[`safeK${k}`]?.certificate?.authorityGranted === false,
+        `safe k=${k} certificate grants authority for ${row.caseId}/${row.policyId}`
+      );
+      requireCondition(
         canonicalJson(row[`safeK${k}`].certificate) === canonicalJson(fixed),
         `safe k=${k} certificate drift for ${row.caseId}/${row.policyId}`
       );
@@ -1058,25 +1099,51 @@ function verifyResultsDirectory(resultsDir, config) {
     requireCondition(row.noState.actionId === null, "no-state must not emit an action");
     if (row.noState.disposition === "continue") noStateContinues += 1;
 
-    // Kea qualification / restricted consumer claims on the row must never grant authority.
+    // Kea qualification / restricted consumer claims must match the adaptive
+    // certificate, never grant authority, and never invent a continue action.
     requireExactKeys(
       row.qualification,
       ["authorityGranted", "disposition"],
       `decision qualification ${row.caseId}/${row.policyId}`
     );
     requireCondition(row.qualification.authorityGranted === false, "qualification grants authority");
+    const expectedQualificationDisposition =
+      adaptive.disposition === "continue"
+        ? "qualified"
+        : adaptive.disposition === "insufficient_confidence"
+          ? "abstained"
+          : "rejected";
     requireCondition(
-      row.qualification.disposition === "qualified" ||
-        row.qualification.disposition === "abstained" ||
-        row.qualification.disposition === "rejected",
-      "qualification disposition invalid"
+      row.qualification.disposition === expectedQualificationDisposition,
+      `qualification disposition drift for ${row.caseId}/${row.policyId}: observed ${row.qualification.disposition} expected ${expectedQualificationDisposition}`
     );
+
     requireExactKeys(
       row.restricted,
       ["actionId", "authorityGranted", "disposition"],
       `decision restricted ${row.caseId}/${row.policyId}`
     );
     requireCondition(row.restricted.authorityGranted === false, "restricted consumer grants authority");
+    if (adaptive.disposition === "continue") {
+      requireCondition(
+        row.restricted.disposition === "continue",
+        `restricted disposition must continue when adaptive continues for ${row.caseId}/${row.policyId}`
+      );
+      requireCondition(
+        row.restricted.actionId === adaptive.actionId,
+        `restricted action drift for ${row.caseId}/${row.policyId}`
+      );
+    } else {
+      requireCondition(
+        row.restricted.disposition === "insufficient_confidence" ||
+          row.restricted.disposition === "abstain",
+        `restricted must abstain when adaptive is unresolved for ${row.caseId}/${row.policyId}`
+      );
+      requireCondition(
+        row.restricted.actionId === null,
+        `restricted must not emit an action when adaptive is unresolved for ${row.caseId}/${row.policyId}`
+      );
+    }
   }
 
   requireCondition(
@@ -1182,6 +1249,10 @@ function verifyResultsDirectory(resultsDir, config) {
   requireCondition(
     evaluation.effects.modelApiCalls === environment.modelApiCalls,
     "model API call counts disagree"
+  );
+  requireCondition(
+    evaluation.effects.authorityEffectsExecuted === environment.authorityEffectsExecuted,
+    "authority effect counts disagree"
   );
 
   // Attacks
@@ -1332,14 +1403,15 @@ function writeSha256Sums(dir, names) {
  */
 function materializeValidResults(dir, tamper = {}) {
   const config = loadFrozenConfig();
-  // 16 synthetic labels keep four-action SHA-256 partitions fully occupied
-  // for every frozen policy seed without using scored BANKING77 outputs.
-  const syntheticLabels = Array.from({ length: 16 }, (_, i) => `label_${i}`);
+  // Protocol freezes a 77-class simplex. Synthetic labels keep four-action
+  // SHA-256 partitions fully occupied for every frozen policy seed without
+  // using scored BANKING77 outputs.
+  const syntheticLabels = Array.from({ length: 77 }, (_, i) => `label_${i}`);
   const policies = regeneratePolicies(config, syntheticLabels);
   // If any seed failed, regeneratePolicies already threw.
 
   const scale = config.probabilityScale;
-  // Construct vectors: one decisive, one tied-ish, one naive-mismatch oriented.
+  // Construct vectors: one decisive, one spread, one alternate-mass oriented.
   function massOn(indexes, weights) {
     const probabilities = Array(syntheticLabels.length).fill(0);
     let remaining = scale;
@@ -1861,7 +1933,7 @@ function runSelfTest() {
 
   // --- Policy regeneration determinism ---
   const config = loadFrozenConfig();
-  const labels = Array.from({ length: 16 }, (_, i) => `label_${i}`);
+  const labels = Array.from({ length: 77 }, (_, i) => `label_${i}`);
   const policiesA = regeneratePolicies(config, labels);
   const policiesB = regeneratePolicies(config, labels);
   requireCondition(policiesA.length === 12, "12 policies required");
@@ -1872,6 +1944,7 @@ function runSelfTest() {
   for (const p of policiesA) {
     assertDecisionPolicy(p);
     requireCondition(p.actionIds.length === 4, "four actions");
+    requireCondition(p.labelIds.length === 77, "77 labels required");
   }
 
   // --- Full package valid path ---
@@ -1912,6 +1985,116 @@ function runSelfTest() {
     try {
       materializeValidResults(dir, tamper);
       expectFailure(() => verifyResultsDirectory(dir, config), pattern);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  // --- Post-materialization decision-row consistency tampers ---
+  function rewritePackageChecksums(packageDir) {
+    writeSha256Sums(packageDir, REQUIRED_ARTIFACTS);
+  }
+
+  function mutateDecisions(packageDir, mutate) {
+    const path = join(packageDir, "decisions.jsonl");
+    const rows = parseJsonl(readFileSync(path, "utf8"), "decisions.jsonl");
+    mutate(rows);
+    writeFileSync(path, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`, "utf8");
+    rewritePackageChecksums(packageDir);
+  }
+
+  {
+    const dir = mkdtempSync(join(tmpdir(), "decision-sufficiency-qualification-drift-"));
+    try {
+      materializeValidResults(dir);
+      mutateDecisions(dir, (rows) => {
+        const row = rows.find((item) => item.adaptive.certificate.disposition === "continue");
+        requireCondition(row, "self-test missing adaptive continue row");
+        row.qualification.disposition = "abstained";
+      });
+      expectFailure(
+        () => verifyResultsDirectory(dir, config),
+        /qualification disposition drift/
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const dir = mkdtempSync(join(tmpdir(), "decision-sufficiency-restricted-action-"));
+    try {
+      materializeValidResults(dir);
+      mutateDecisions(dir, (rows) => {
+        const row = rows.find(
+          (item) =>
+            item.adaptive.certificate.disposition === "continue" && item.restricted.actionId
+        );
+        requireCondition(row, "self-test missing restricted continue row");
+        row.restricted.actionId =
+          row.restricted.actionId === "action_0" ? "action_1" : "action_0";
+      });
+      expectFailure(() => verifyResultsDirectory(dir, config), /restricted action drift/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const dir = mkdtempSync(join(tmpdir(), "decision-sufficiency-restricted-continue-"));
+    try {
+      materializeValidResults(dir);
+      mutateDecisions(dir, (rows) => {
+        const row = rows.find(
+          (item) => item.adaptive.certificate.disposition === "insufficient_confidence"
+        );
+        requireCondition(row, "self-test missing adaptive insufficient row");
+        row.qualification.disposition = "qualified";
+        row.restricted.disposition = "continue";
+        row.restricted.actionId = "action_0";
+      });
+      expectFailure(
+        () => verifyResultsDirectory(dir, config),
+        /qualification disposition drift|restricted must abstain|restricted action/
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const dir = mkdtempSync(join(tmpdir(), "decision-sufficiency-nested-schema-"));
+    try {
+      materializeValidResults(dir);
+      mutateDecisions(dir, (rows) => {
+        rows[0].adaptive.hiddenNote = "smuggle";
+        rows[0].fullVector.secret = "x";
+        rows[0].naiveTop1.extra = true;
+        rows[0].safeK1.note = "y";
+      });
+      expectFailure(
+        () => verifyResultsDirectory(dir, config),
+        /fields are not canonical|canonical/
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  {
+    const dir = mkdtempSync(join(tmpdir(), "decision-sufficiency-label-denominator-"));
+    try {
+      materializeValidResults(dir);
+      const policiesPath = join(dir, "policies.json");
+      const policiesBody = JSON.parse(readFileSync(policiesPath, "utf8"));
+      policiesBody.labelIds = policiesBody.labelIds.slice(0, 16);
+      // Keep policies/vectors incoherent so the first fail-closed gate fires on denominator.
+      writeFileSync(policiesPath, `${canonicalJson(policiesBody)}\n`, "utf8");
+      rewritePackageChecksums(dir);
+      expectFailure(
+        () => verifyResultsDirectory(dir, config),
+        /label denominator|length mismatch|policy/
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

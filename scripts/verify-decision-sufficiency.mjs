@@ -24,6 +24,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -166,6 +167,39 @@ function loadFrozenConfig() {
   requireCondition(config.effects?.providerApiCallsMaximum === 0, "provider API budget drifted");
   requireCondition(config.effects?.modelApiCallsMaximum === 0, "model API budget drifted");
   requireCondition(config.effects?.authorityEffectsMaximum === 0, "authority effect budget drifted");
+  const admission = config.primaryAdmission;
+  requireCondition(
+    admission && typeof admission === "object" && !Array.isArray(admission),
+    "primaryAdmission missing"
+  );
+  requireCondition(
+    admission.adaptiveSafeCoverageMinimum === 0.9,
+    "adaptiveSafeCoverageMinimum drifted"
+  );
+  requireCondition(
+    admission.adaptiveCoverageGainOverSafeK1Minimum === 0.1,
+    "adaptiveCoverageGainOverSafeK1Minimum drifted"
+  );
+  requireCondition(
+    admission.adaptiveDecisionMismatchesMaximum === 0,
+    "adaptiveDecisionMismatchesMaximum drifted"
+  );
+  requireCondition(
+    admission.fullVectorDecisionMismatchesMaximum === 0,
+    "fullVectorDecisionMismatchesMaximum drifted"
+  );
+  requireCondition(
+    admission.naiveTop1DecisionMismatchesMinimum === 1,
+    "naiveTop1DecisionMismatchesMinimum drifted"
+  );
+  requireCondition(admission.noStateContinuesMaximum === 0, "noStateContinuesMaximum drifted");
+  requireCondition(
+    config.bootstrap?.method === "case-clustered-percentile" &&
+      config.bootstrap.seed === 424242 &&
+      config.bootstrap.draws === 2000,
+    "bootstrap contract drifted"
+  );
+  requireCondition(config.canonicalSeed === 20260805, "canonicalSeed drifted");
   return config;
 }
 
@@ -674,6 +708,17 @@ function assertChecksums(dir) {
   }
 }
 
+function requireExactKeys(value, expectedKeys, path) {
+  requireCondition(
+    value !== null && typeof value === "object" && !Array.isArray(value),
+    `${path} must be a plain object`
+  );
+  requireCondition(
+    canonicalJson(Object.keys(value).sort()) === canonicalJson([...expectedKeys].sort()),
+    `${path} fields are not canonical`
+  );
+}
+
 function rejectHiddenText(value, path) {
   if (value === null || value === undefined) return;
   if (typeof value === "string") {
@@ -704,6 +749,42 @@ function rejectHiddenText(value, path) {
   }
 }
 
+/** Fail closed on any nested authority grant or nonzero authority-effect claim. */
+function rejectAuthorityClaims(value, path) {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => rejectAuthorityClaims(item, `${path}[${index}]`));
+    return;
+  }
+  if (typeof value === "object") {
+    if (Object.prototype.hasOwnProperty.call(value, "authorityGranted")) {
+      requireCondition(
+        value.authorityGranted === false,
+        `authority claim at ${path}.authorityGranted`
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(value, "authorityEffects")) {
+      requireCondition(value.authorityEffects === 0, `authority effects at ${path}.authorityEffects`);
+    }
+    if (Object.prototype.hasOwnProperty.call(value, "authorityEffectsExecuted")) {
+      requireCondition(
+        value.authorityEffectsExecuted === 0,
+        `authority effects at ${path}.authorityEffectsExecuted`
+      );
+    }
+    for (const [key, child] of Object.entries(value)) {
+      rejectAuthorityClaims(child, `${path}.${key}`);
+    }
+  }
+}
+
+/** Deterministic certificate-sample case selection: smallest SHA-256(caseId). */
+function selectSampleCaseIds(caseIds, count) {
+  return [...caseIds]
+    .sort((left, right) => sha256Hex(left).localeCompare(sha256Hex(right)))
+    .slice(0, Math.min(count, caseIds.length));
+}
+
 // ---------------------------------------------------------------------------
 // Full scored-package verification
 // ---------------------------------------------------------------------------
@@ -731,12 +812,34 @@ function verifyResultsDirectory(resultsDir, config) {
     ["attacks.json", attacks],
   ]) {
     rejectHiddenText(value, name);
+    rejectAuthorityClaims(value, name);
   }
-  vectors.forEach((row, index) => rejectHiddenText(row, `vectors.jsonl[${index}]`));
-  decisions.forEach((row, index) => rejectHiddenText(row, `decisions.jsonl[${index}]`));
-  samples.forEach((row, index) => rejectHiddenText(row, `samples.jsonl[${index}]`));
+  vectors.forEach((row, index) => {
+    rejectHiddenText(row, `vectors.jsonl[${index}]`);
+    rejectAuthorityClaims(row, `vectors.jsonl[${index}]`);
+  });
+  decisions.forEach((row, index) => {
+    rejectHiddenText(row, `decisions.jsonl[${index}]`);
+    rejectAuthorityClaims(row, `decisions.jsonl[${index}]`);
+  });
+  samples.forEach((row, index) => {
+    rejectHiddenText(row, `samples.jsonl[${index}]`);
+    rejectAuthorityClaims(row, `samples.jsonl[${index}]`);
+  });
 
   // Environment schema and zero-effect contract
+  requireExactKeys(
+    environment,
+    [
+      "authorityEffectsExecuted",
+      "modelApiCalls",
+      "providerApiCalls",
+      "schemaVersion",
+      "scoredPhaseNetworkCalls",
+      "status",
+    ],
+    "environment.json"
+  );
   requireCondition(environment.schemaVersion === ENVIRONMENT_SCHEMA, "environment schema mismatch");
   requireCondition(
     environment.status === "preregistered-prospective-secondary-analysis",
@@ -749,11 +852,12 @@ function verifyResultsDirectory(resultsDir, config) {
     "environment authority effects must be zero"
   );
   requireCondition(
-    environment.scoredPhaseNetworkCalls === 0 || environment.scoredPhaseNetworkCalls === undefined,
+    environment.scoredPhaseNetworkCalls === 0,
     "scored-phase network calls must be zero"
   );
 
   // Policies
+  requireExactKeys(policiesArtifact, ["labelIds", "policies", "schemaVersion"], "policies.json");
   requireCondition(policiesArtifact.schemaVersion === POLICIES_SCHEMA, "policies schema mismatch");
   requireCondition(Array.isArray(policiesArtifact.policies), "policies.policies must be an array");
   requireCondition(
@@ -774,14 +878,43 @@ function verifyResultsDirectory(resultsDir, config) {
   });
   const policyById = new Map(policiesArtifact.policies.map((policy) => [policy.policyId, policy]));
 
-  // Vectors: integer mass, content IDs, no text
+  // Vectors: integer mass, content IDs, no text.
+  // Required keys are exact; optional runner metadata is allow-listed so schema
+  // drift cannot smuggle free-form fields while still accepting frozen state rows.
+  const VECTOR_REQUIRED_KEYS = [
+    "caseId",
+    "probabilities",
+    "probabilityScale",
+    "schemaVersion",
+    "textIncluded",
+    "vectorId",
+  ];
+  const VECTOR_OPTIONAL_KEYS = new Set([
+    "labelIds",
+    "modelId",
+    "sourceIndex",
+    "sourceSplit",
+    "trueIntent",
+  ]);
   requireCondition(vectors.length >= 1, "vectors.jsonl is empty");
   const vectorByCase = new Map();
   for (const row of vectors) {
+    requireCondition(
+      row !== null && typeof row === "object" && !Array.isArray(row),
+      "vector row must be a plain object"
+    );
+    for (const key of VECTOR_REQUIRED_KEYS) {
+      requireCondition(Object.prototype.hasOwnProperty.call(row, key), `vector missing ${key}`);
+    }
+    for (const key of Object.keys(row)) {
+      requireCondition(
+        VECTOR_REQUIRED_KEYS.includes(key) || VECTOR_OPTIONAL_KEYS.has(key),
+        `vector schema drift at ${key}`
+      );
+    }
     requireCondition(row.schemaVersion === VECTOR_SCHEMA, "vector schema mismatch");
     requireCondition(typeof row.caseId === "string" && SYMBOLIC_ID.test(row.caseId), "vector caseId invalid");
     requireCondition(row.textIncluded === false, "vector textIncluded must be false");
-    requireCondition(!("text" in row), "vector contains source text");
     requireCondition(
       Array.isArray(row.probabilities) && row.probabilities.length === policiesArtifact.labelIds.length,
       `vector ${row.caseId} length mismatch`
@@ -794,8 +927,13 @@ function verifyResultsDirectory(resultsDir, config) {
     vectorByCase.set(row.caseId, row);
   }
 
-  // Decisions: recompute full-vector, adaptive, fixed-k, naive, no-state
+  // Decisions: complete case×policy product; recompute every control arm
+  const expectedDecisionCount = vectorByCase.size * policiesArtifact.policies.length;
   requireCondition(decisions.length >= 1, "decisions.jsonl is empty");
+  requireCondition(
+    decisions.length === expectedDecisionCount,
+    `decision denominator drifted: observed ${decisions.length} expected ${expectedDecisionCount}`
+  );
   let fullVectorNonTied = 0;
   let adaptiveSafeContinues = 0;
   let safeK1Continues = 0;
@@ -805,11 +943,34 @@ function verifyResultsDirectory(resultsDir, config) {
   let naiveTop1DecisionMismatches = 0;
   let noStateContinues = 0;
   let authorityGrants = 0;
+  const seenDecisionKeys = new Set();
 
   for (const row of decisions) {
+    requireExactKeys(
+      row,
+      [
+        "adaptive",
+        "authorityGranted",
+        "caseId",
+        "fullVector",
+        "naiveTop1",
+        "noState",
+        "policyId",
+        "qualification",
+        "restricted",
+        "safeK1",
+        "safeK3",
+        "schemaVersion",
+        "vectorId",
+      ],
+      "decision row"
+    );
     requireCondition(row.schemaVersion === DECISION_ROW_SCHEMA, "decision row schema mismatch");
     requireCondition(vectorByCase.has(row.caseId), `decision references unknown case ${row.caseId}`);
     requireCondition(policyById.has(row.policyId), `decision references unknown policy ${row.policyId}`);
+    const decisionKey = `${row.caseId}\0${row.policyId}`;
+    requireCondition(!seenDecisionKeys.has(decisionKey), `duplicate decision for ${row.caseId}/${row.policyId}`);
+    seenDecisionKeys.add(decisionKey);
     const vector = vectorByCase.get(row.caseId);
     const policy = policyById.get(row.policyId);
     requireCondition(row.vectorId === vector.vectorId, `decision vectorId drift for ${row.caseId}`);
@@ -821,15 +982,6 @@ function verifyResultsDirectory(resultsDir, config) {
         row.fullVector.actionId === reference.actionId,
       `full-vector decision mismatch for ${row.caseId}/${row.policyId}`
     );
-    // Artifact self-consistency for reconstruction mismatch counter (should stay 0 when above holds).
-    if (
-      row.fullVector.disposition !== reference.disposition ||
-      row.fullVector.actionId !== reference.actionId
-    ) {
-      fullVectorDecisionMismatches += 1;
-    }
-
-    if (reference.disposition === "continue") fullVectorNonTied += 1;
 
     requireCondition(
       row.adaptive?.certificate?.authorityGranted === false,
@@ -854,11 +1006,19 @@ function verifyResultsDirectory(resultsDir, config) {
       `adaptive certificate drift for ${row.caseId}/${row.policyId}`
     );
     if (adaptive.authorityGranted !== false) authorityGrants += 1;
-    if (adaptive.disposition === "continue") {
-      adaptiveSafeContinues += 1;
-      if (reference.disposition !== "continue" || adaptive.actionId !== reference.actionId) {
-        adaptiveDecisionMismatches += 1;
+
+    // Safe coverage denominator is full-vector non-tied case-policy decisions.
+    if (reference.disposition === "continue") {
+      fullVectorNonTied += 1;
+      if (adaptive.disposition === "continue") {
+        adaptiveSafeContinues += 1;
+        if (adaptive.actionId !== reference.actionId) {
+          adaptiveDecisionMismatches += 1;
+        }
       }
+    } else if (adaptive.disposition === "continue") {
+      // Adaptive must not continue when the full vector is unresolved.
+      adaptiveDecisionMismatches += 1;
     }
 
     for (const k of config.fixedSafeControls) {
@@ -873,7 +1033,7 @@ function verifyResultsDirectory(resultsDir, config) {
         canonicalJson(row[`safeK${k}`].certificate) === canonicalJson(fixed),
         `safe k=${k} certificate drift for ${row.caseId}/${row.policyId}`
       );
-      if (fixed.disposition === "continue") {
+      if (reference.disposition === "continue" && fixed.disposition === "continue") {
         if (k === 1) safeK1Continues += 1;
         if (k === 3) safeK3Continues += 1;
       }
@@ -899,19 +1059,30 @@ function verifyResultsDirectory(resultsDir, config) {
     if (row.noState.disposition === "continue") noStateContinues += 1;
 
     // Kea qualification / restricted consumer claims on the row must never grant authority.
-    if (row.qualification) {
-      requireCondition(row.qualification.authorityGranted === false, "qualification grants authority");
-      requireCondition(
-        row.qualification.disposition === "qualified" ||
-          row.qualification.disposition === "abstained" ||
-          row.qualification.disposition === "rejected",
-        "qualification disposition invalid"
-      );
-    }
-    if (row.restricted) {
-      requireCondition(row.restricted.authorityGranted === false, "restricted consumer grants authority");
-    }
+    requireExactKeys(
+      row.qualification,
+      ["authorityGranted", "disposition"],
+      `decision qualification ${row.caseId}/${row.policyId}`
+    );
+    requireCondition(row.qualification.authorityGranted === false, "qualification grants authority");
+    requireCondition(
+      row.qualification.disposition === "qualified" ||
+        row.qualification.disposition === "abstained" ||
+        row.qualification.disposition === "rejected",
+      "qualification disposition invalid"
+    );
+    requireExactKeys(
+      row.restricted,
+      ["actionId", "authorityGranted", "disposition"],
+      `decision restricted ${row.caseId}/${row.policyId}`
+    );
+    requireCondition(row.restricted.authorityGranted === false, "restricted consumer grants authority");
   }
+
+  requireCondition(
+    seenDecisionKeys.size === expectedDecisionCount,
+    "case-policy decision product is incomplete"
+  );
 
   const adaptiveSafeCoverage =
     fullVectorNonTied === 0 ? 0 : adaptiveSafeContinues / fullVectorNonTied;
@@ -919,6 +1090,22 @@ function verifyResultsDirectory(resultsDir, config) {
   const safeK3Coverage = fullVectorNonTied === 0 ? 0 : safeK3Continues / fullVectorNonTied;
 
   // Evaluation aggregate + primary verdict
+  requireExactKeys(
+    evaluation,
+    [
+      "authorityGranted",
+      "caseCount",
+      "decisionCount",
+      "effects",
+      "metrics",
+      "primaryGates",
+      "sampleCount",
+      "schemaVersion",
+      "scientificVerdict",
+      "status",
+    ],
+    "evaluation.json"
+  );
   requireCondition(evaluation.schemaVersion === EVALUATION_SCHEMA, "evaluation schema mismatch");
   requireCondition(
     evaluation.status === "preregistered-prospective-secondary-analysis",
@@ -929,6 +1116,28 @@ function verifyResultsDirectory(resultsDir, config) {
   requireCondition(
     evaluation.decisionCount === decisions.length,
     "evaluation decisionCount drifted"
+  );
+  requireCondition(
+    evaluation.decisionCount === expectedDecisionCount,
+    "evaluation decisionCount does not match case×policy product"
+  );
+  requireExactKeys(
+    evaluation.metrics,
+    [
+      "adaptiveDecisionMismatches",
+      "adaptiveSafeCoverage",
+      "fullVectorDecisionMismatches",
+      "naiveTop1DecisionMismatches",
+      "noStateContinues",
+      "safeK1Coverage",
+      "safeK3Coverage",
+    ],
+    "evaluation.metrics"
+  );
+  requireExactKeys(
+    evaluation.effects,
+    ["authorityEffectsExecuted", "modelApiCalls", "providerApiCalls"],
+    "evaluation.effects"
   );
   requireCondition(
     Math.abs(evaluation.metrics.adaptiveSafeCoverage - adaptiveSafeCoverage) < 1e-12,
@@ -976,38 +1185,69 @@ function verifyResultsDirectory(resultsDir, config) {
   );
 
   // Attacks
+  requireExactKeys(
+    attacks,
+    [
+      "allSpecifiedTampersRejected",
+      "authorityGranted",
+      "cases",
+      "falseAccepts",
+      "schemaVersion",
+    ],
+    "attacks.json"
+  );
   requireCondition(attacks.schemaVersion === ATTACKS_SCHEMA, "attacks schema mismatch");
   requireCondition(attacks.authorityGranted === false, "attacks artifact grants authority");
   requireCondition(attacks.allSpecifiedTampersRejected === true, "attack suite did not fully reject");
   requireCondition(attacks.falseAccepts === 0, "attack suite false accepts recorded");
   requireCondition(Array.isArray(attacks.cases) && attacks.cases.length >= 1, "attacks.cases empty");
   for (const attack of attacks.cases) {
+    requireExactKeys(attack, ["authorityGranted", "name", "rejected"], "attack case");
     requireCondition(attack.rejected === true, `attack ${attack.name} was not rejected`);
     requireCondition(attack.authorityGranted === false, `attack ${attack.name} granted authority`);
   }
 
-  // Samples (text-free certificate samples)
+  // Samples (text-free certificate samples under the first policy, deterministic case set)
+  const expectedSampleCaseIds = selectSampleCaseIds(
+    [...vectorByCase.keys()],
+    config.certificateSampleCases
+  );
+  const samplePolicy = policiesArtifact.policies[0];
   requireCondition(
-    samples.length === config.certificateSampleCases || samples.length === evaluation.sampleCount,
-    "sample denominator drifted"
+    samples.length === expectedSampleCaseIds.length,
+    `sample denominator drifted: observed ${samples.length} expected ${expectedSampleCaseIds.length}`
   );
   requireCondition(
     evaluation.sampleCount === samples.length,
     "evaluation.sampleCount disagrees with samples.jsonl"
   );
-  for (const sample of samples) {
+  const seenSampleCases = new Set();
+  for (let sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) {
+    const sample = samples[sampleIndex];
+    requireExactKeys(
+      sample,
+      ["caseId", "certificate", "policyId", "schemaVersion", "textIncluded"],
+      "sample row"
+    );
     requireCondition(sample.schemaVersion === SAMPLE_SCHEMA, "sample schema mismatch");
     requireCondition(sample.textIncluded === false, "sample textIncluded must be false");
-    requireCondition(!("text" in sample), "sample contains source text");
     requireCondition(vectorByCase.has(sample.caseId), `sample unknown case ${sample.caseId}`);
-    requireCondition(policyById.has(sample.policyId), `sample unknown policy ${sample.policyId}`);
+    requireCondition(
+      sample.caseId === expectedSampleCaseIds[sampleIndex],
+      `sample case selection drifted at index ${sampleIndex}`
+    );
+    requireCondition(!seenSampleCases.has(sample.caseId), `duplicate sample case ${sample.caseId}`);
+    seenSampleCases.add(sample.caseId);
+    requireCondition(
+      sample.policyId === samplePolicy.policyId,
+      `sample must use the first regenerated policy for ${sample.caseId}`
+    );
     const vector = vectorByCase.get(sample.caseId);
-    const policy = policyById.get(sample.policyId);
     const expected = createDecisionCertificate({
       caseId: sample.caseId,
       probabilities: vector.probabilities,
       probabilityScale: config.probabilityScale,
-      policy,
+      policy: samplePolicy,
       maxRevealed: config.maxRevealedProbabilities,
     });
     requireCondition(
@@ -1015,7 +1255,7 @@ function verifyResultsDirectory(resultsDir, config) {
       `sample certificate drift for ${sample.caseId}/${sample.policyId}`
     );
     requireCondition(sample.certificate.authorityGranted === false, "sample certificate grants authority");
-    const mathErrors = verifyDecisionCertificateMath(sample.certificate, policy);
+    const mathErrors = verifyDecisionCertificateMath(sample.certificate, samplePolicy);
     requireCondition(mathErrors.length === 0, `sample certificate math failed: ${mathErrors[0]}`);
   }
 
@@ -1146,113 +1386,114 @@ function materializeValidResults(dir, tamper = {}) {
     textIncluded: false,
   }));
 
-  const policy = policies[0];
   const decisions = [];
-  for (const vector of vectors) {
-    let reference;
-    try {
-      reference = referenceDecision(vector.probabilities, scale, policy);
-    } catch {
-      reference = { disposition: "insufficient_confidence", actionId: null };
-    }
+  for (const policy of policies) {
+    for (const vector of vectors) {
+      let reference;
+      try {
+        reference = referenceDecision(vector.probabilities, scale, policy);
+      } catch {
+        reference = { disposition: "insufficient_confidence", actionId: null };
+      }
 
-    let adaptive;
-    try {
-      adaptive = createDecisionCertificate({
+      let adaptive;
+      try {
+        adaptive = createDecisionCertificate({
+          caseId: vector.caseId,
+          probabilities: vector.probabilities,
+          probabilityScale: scale,
+          policy,
+          maxRevealed: config.maxRevealedProbabilities,
+        });
+      } catch {
+        adaptive = {
+          schemaVersion: DECISION_CERTIFICATE_SCHEMA,
+          caseId: vector.caseId,
+          policyId: policy.policyId,
+          vectorId: vector.vectorId,
+          probabilityScale: scale,
+          sourceProbabilityCount: syntheticLabels.length,
+          maxRevealed: config.maxRevealedProbabilities,
+          revealed: [{ index: 0, probabilityUnits: vector.probabilities[0] }],
+          residualUnits: scale - vector.probabilities[0],
+          disposition: "insufficient_confidence",
+          actionId: null,
+          pairwiseLowerAdvantages: [],
+          authorityGranted: false,
+          certificateId: "decisioncert_" + "0".repeat(20),
+        };
+      }
+
+      // Apply certificate tampers only on the first case×policy pair so packages stay small
+      // and the failure mode is deterministic.
+      const isPrimaryPair =
+        policy.policyId === policies[0].policyId && vector.caseId === vectors[0].caseId;
+      if (isPrimaryPair && tamper.forgedBounds && adaptive.pairwiseLowerAdvantages?.length) {
+        adaptive = structuredClone(adaptive);
+        adaptive.pairwiseLowerAdvantages[0].lowerAdvantageUnits += 1;
+        adaptive.certificateId = contentId("decisioncert", certificateBody(adaptive));
+      }
+      if (isPrimaryPair && tamper.forgedAction) {
+        adaptive = structuredClone(adaptive);
+        adaptive.actionId = policy.actionIds[0];
+        adaptive.disposition = "continue";
+        adaptive.certificateId = contentId("decisioncert", certificateBody(adaptive));
+      }
+      if (isPrimaryPair && tamper.authoritySmuggle) {
+        adaptive = structuredClone(adaptive);
+        adaptive.authorityGranted = true;
+        adaptive.certificateId = contentId("decisioncert", certificateBody(adaptive));
+      }
+
+      const safeK1 = createDecisionCertificate({
         caseId: vector.caseId,
         probabilities: vector.probabilities,
         probabilityScale: scale,
         policy,
-        maxRevealed: config.maxRevealedProbabilities,
+        maxRevealed: 1,
       });
-    } catch {
-      adaptive = {
-        schemaVersion: DECISION_CERTIFICATE_SCHEMA,
+      const safeK3 = createDecisionCertificate({
+        caseId: vector.caseId,
+        probabilities: vector.probabilities,
+        probabilityScale: scale,
+        policy,
+        maxRevealed: 3,
+      });
+      const naive = naiveTop1Action(vector.probabilities, policy);
+
+      decisions.push({
+        schemaVersion: DECISION_ROW_SCHEMA,
         caseId: vector.caseId,
         policyId: policy.policyId,
         vectorId: vector.vectorId,
-        probabilityScale: scale,
-        sourceProbabilityCount: syntheticLabels.length,
-        maxRevealed: config.maxRevealedProbabilities,
-        revealed: [{ index: 0, probabilityUnits: vector.probabilities[0] }],
-        residualUnits: scale - vector.probabilities[0],
-        disposition: "insufficient_confidence",
-        actionId: null,
-        pairwiseLowerAdvantages: [],
         authorityGranted: false,
-        certificateId: "decisioncert_" + "0".repeat(20),
-      };
+        fullVector: {
+          disposition: reference.disposition,
+          actionId: reference.actionId,
+        },
+        adaptive: { certificate: adaptive },
+        safeK1: { certificate: safeK1 },
+        safeK3: { certificate: safeK3 },
+        naiveTop1: { disposition: naive.disposition, actionId: naive.actionId },
+        noState: { disposition: "abstain", actionId: null },
+        qualification: {
+          disposition:
+            adaptive.disposition === "continue"
+              ? "qualified"
+              : adaptive.disposition === "insufficient_confidence"
+                ? "abstained"
+                : "rejected",
+          authorityGranted: false,
+        },
+        restricted: {
+          disposition:
+            adaptive.disposition === "continue" ? "continue" : "insufficient_confidence",
+          actionId: adaptive.disposition === "continue" ? adaptive.actionId : null,
+          authorityGranted: false,
+        },
+      });
     }
-
-    if (tamper.forgedBounds && adaptive.pairwiseLowerAdvantages?.length) {
-      adaptive = structuredClone(adaptive);
-      adaptive.pairwiseLowerAdvantages[0].lowerAdvantageUnits += 1;
-      adaptive.certificateId = contentId("decisioncert", certificateBody(adaptive));
-    }
-    if (tamper.forgedAction) {
-      adaptive = structuredClone(adaptive);
-      adaptive.actionId = policy.actionIds[0];
-      adaptive.disposition = "continue";
-      adaptive.certificateId = contentId("decisioncert", certificateBody(adaptive));
-    }
-    if (tamper.authoritySmuggle) {
-      adaptive = structuredClone(adaptive);
-      adaptive.authorityGranted = true;
-      adaptive.certificateId = contentId("decisioncert", certificateBody(adaptive));
-    }
-
-    const safeK1 = createDecisionCertificate({
-      caseId: vector.caseId,
-      probabilities: vector.probabilities,
-      probabilityScale: scale,
-      policy,
-      maxRevealed: 1,
-    });
-    const safeK3 = createDecisionCertificate({
-      caseId: vector.caseId,
-      probabilities: vector.probabilities,
-      probabilityScale: scale,
-      policy,
-      maxRevealed: 3,
-    });
-    const naive = naiveTop1Action(vector.probabilities, policy);
-
-    decisions.push({
-      schemaVersion: DECISION_ROW_SCHEMA,
-      caseId: vector.caseId,
-      policyId: policy.policyId,
-      vectorId: vector.vectorId,
-      authorityGranted: false,
-      fullVector: {
-        disposition: reference.disposition,
-        actionId: reference.actionId,
-      },
-      adaptive: { certificate: adaptive },
-      safeK1: { certificate: safeK1 },
-      safeK3: { certificate: safeK3 },
-      naiveTop1: { disposition: naive.disposition, actionId: naive.actionId },
-      noState: { disposition: "abstain", actionId: null },
-      qualification: {
-        disposition:
-          adaptive.disposition === "continue"
-            ? "qualified"
-            : adaptive.disposition === "insufficient_confidence"
-              ? "abstained"
-              : "rejected",
-        authorityGranted: false,
-      },
-      restricted: {
-        disposition:
-          adaptive.disposition === "continue" ? "continue" : "insufficient_confidence",
-        actionId: adaptive.disposition === "continue" ? adaptive.actionId : null,
-        authorityGranted: false,
-      },
-    });
   }
-
-  // Optionally produce more decisions across policies so primary metrics are coherent.
-  // Full mode iterates all decision rows; metrics use all of them.
-  // For self-test include only policy[0] rows to keep package small.
 
   let fullVectorNonTied = 0;
   let adaptiveSafeContinues = 0;
@@ -1262,26 +1503,32 @@ function materializeValidResults(dir, tamper = {}) {
   let fullVectorDecisionMismatches = 0;
   let naiveTop1DecisionMismatches = 0;
   let noStateContinues = 0;
+  const policyById = new Map(policies.map((policy) => [policy.policyId, policy]));
 
   for (const row of decisions) {
-    const vector = vectors.find((v) => v.caseId === row.caseId);
+    const vector = vectors.find((item) => item.caseId === row.caseId);
+    const policy = policyById.get(row.policyId);
     try {
       const reference = referenceDecision(vector.probabilities, scale, policy);
-      if (reference.disposition === "continue") fullVectorNonTied += 1;
-      if (row.adaptive.certificate.disposition === "continue") {
-        adaptiveSafeContinues += 1;
-        if (reference.disposition !== "continue" || row.adaptive.certificate.actionId !== reference.actionId) {
-          adaptiveDecisionMismatches += 1;
+      if (reference.disposition === "continue") {
+        fullVectorNonTied += 1;
+        if (row.adaptive.certificate.disposition === "continue") {
+          adaptiveSafeContinues += 1;
+          if (row.adaptive.certificate.actionId !== reference.actionId) {
+            adaptiveDecisionMismatches += 1;
+          }
         }
-      }
-      if (row.safeK1.certificate.disposition === "continue") safeK1Continues += 1;
-      if (row.safeK3.certificate.disposition === "continue") safeK3Continues += 1;
-      const naive = naiveTop1Action(vector.probabilities, policy);
-      if (
-        reference.disposition === "continue" &&
-        (naive.disposition !== "continue" || naive.actionId !== reference.actionId)
-      ) {
-        naiveTop1DecisionMismatches += 1;
+        if (row.safeK1.certificate.disposition === "continue") safeK1Continues += 1;
+        if (row.safeK3.certificate.disposition === "continue") safeK3Continues += 1;
+        const naive = naiveTop1Action(vector.probabilities, policy);
+        if (
+          naive.disposition !== "continue" ||
+          naive.actionId !== reference.actionId
+        ) {
+          naiveTop1DecisionMismatches += 1;
+        }
+      } else if (row.adaptive.certificate.disposition === "continue") {
+        adaptiveDecisionMismatches += 1;
       }
       if (row.noState.disposition === "continue") noStateContinues += 1;
     } catch {
@@ -1316,15 +1563,23 @@ function materializeValidResults(dir, tamper = {}) {
     config.primaryAdmission
   );
 
-  // Sample count: evaluation.sampleCount must equal samples.jsonl length.
-  // Full mode allows samples.length === config.certificateSampleCases OR evaluation.sampleCount.
-  const samples = decisions.map((row) => ({
-    schemaVersion: SAMPLE_SCHEMA,
-    caseId: row.caseId,
-    policyId: row.policyId,
-    textIncluded: false,
-    certificate: row.adaptive.certificate,
-  }));
+  // Deterministic sample selection under the first policy.
+  const sampleCaseIds = selectSampleCaseIds(
+    vectors.map((vector) => vector.caseId),
+    config.certificateSampleCases
+  );
+  const samples = sampleCaseIds.map((caseId) => {
+    const row = decisions.find(
+      (decision) => decision.caseId === caseId && decision.policyId === policies[0].policyId
+    );
+    return {
+      schemaVersion: SAMPLE_SCHEMA,
+      caseId,
+      policyId: policies[0].policyId,
+      textIncluded: false,
+      certificate: row.adaptive.certificate,
+    };
+  });
 
   const environment = {
     schemaVersion: ENVIRONMENT_SCHEMA,
@@ -1451,6 +1706,37 @@ function materializeValidResults(dir, tamper = {}) {
 
   if (tamper.missingArtifact) {
     rmSync(join(dir, "samples.jsonl"), { force: true });
+  }
+
+  if (tamper.symlinkArtifact) {
+    const target = join(dir, "attacks.json");
+    const outside = join(tmpdir(), `decision-sufficiency-attacks-${process.pid}.json`);
+    writeFileSync(outside, readFileSync(target));
+    rmSync(target, { force: true });
+    symlinkSync(outside, target);
+  }
+
+  if (tamper.incompleteGrid) {
+    // Drop half the decisions so the case×policy product is incomplete.
+    const kept = decisions.slice(0, Math.max(1, Math.floor(decisions.length / 2)));
+    writeFileSync(
+      join(dir, "decisions.jsonl"),
+      `${kept.map((row) => JSON.stringify(row)).join("\n")}\n`,
+      "utf8"
+    );
+    const evaluationPath = join(dir, "evaluation.json");
+    const evaluationBody = JSON.parse(readFileSync(evaluationPath, "utf8"));
+    evaluationBody.decisionCount = kept.length;
+    writeFileSync(evaluationPath, `${canonicalJson(evaluationBody)}\n`, "utf8");
+    writeSha256Sums(dir, REQUIRED_ARTIFACTS);
+  }
+
+  if (tamper.schemaDrift) {
+    const evaluationPath = join(dir, "evaluation.json");
+    const evaluationBody = JSON.parse(readFileSync(evaluationPath, "utf8"));
+    evaluationBody.smuggledAuthority = { authorityGranted: true };
+    writeFileSync(evaluationPath, `${canonicalJson(evaluationBody)}\n`, "utf8");
+    writeSha256Sums(dir, REQUIRED_ARTIFACTS);
   }
 
   return { config, policies, vectors, decisions };
@@ -1607,7 +1893,7 @@ function runSelfTest() {
     { name: "forgedBounds", tamper: { forgedBounds: true }, pattern: /certificate|bounds|drift/ },
     { name: "forgedAction", tamper: { forgedAction: true }, pattern: /certificate|action|drift|bounds|disposition/ },
     { name: "authoritySmuggle", tamper: { authoritySmuggle: true }, pattern: /authority/ },
-    { name: "hiddenText", tamper: { hiddenText: true }, pattern: /text/ },
+    { name: "hiddenText", tamper: { hiddenText: true }, pattern: /text|canonical|fields/ },
     { name: "policyDrift", tamper: { policyDrift: true }, pattern: /policy/ },
     { name: "driftCoverage", tamper: { driftCoverage: true }, pattern: /Coverage|coverage|primaryGates|scientificVerdict/ },
     { name: "nonzeroEffects", tamper: { nonzeroEffects: true }, pattern: /API|effect|provider/i },
@@ -1616,6 +1902,9 @@ function runSelfTest() {
     { name: "missingArtifact", tamper: { missingArtifact: true }, pattern: /missing|inventory/ },
     { name: "badChecksum", tamper: { badChecksum: true }, pattern: /digest/ },
     { name: "evaluationAuthority", tamper: { evaluationAuthority: true }, pattern: /authority/ },
+    { name: "symlinkArtifact", tamper: { symlinkArtifact: true }, pattern: /symlink/ },
+    { name: "incompleteGrid", tamper: { incompleteGrid: true }, pattern: /denominator|decision|product|incomplete/i },
+    { name: "schemaDrift", tamper: { schemaDrift: true }, pattern: /canonical|fields|authority/ },
   ];
 
   for (const { name, tamper, pattern } of tampers) {

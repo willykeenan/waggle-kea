@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "waggle.decision-sufficiency.failed-trial.v1",
+  "trial": 3,
+  "status": "preserved-excluded",
+  "freezeSha256": "f18d1538738d40058d2e615980b2a775ac062439f61887d6d18c7e1744477f23",
+  "stageReached": "pre-output-verifier-self-test",
+  "failure": "The corrected verifier properly required raw label lineage, but its own synthetic no-score fixtures did not yet carry that mandatory field. The self-test failed before any Trial 3 experiment output was generated or inspected.",
+  "scientificOutcomeObserved": false,
+  "artifacts": {},
+  "correctionBoundary": "Trial 4 may add the frozen synthetic label inventory to verifier self-test rows and update only the verifier and freeze verifier. The question, source, model, vectors, policies, cases, controls, thresholds, certificate algorithm, evaluation, and Trial 2 primary result remain frozen.",
+  "authorityGranted": false
+}

@@ -1,6 +1,6 @@
 {
   "name": "waggle-kea",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Inspectable machine coordination with a deterministic protocol, fail-closed audit layer, and reproducible ML evaluation.",
   "type": "module",
   "license": "MIT",
@@ -42,11 +42,14 @@
     "test": "tsx --test tests/*.test.ts",
     "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-branches=75 tests/*.test.ts",
     "verify:benchmark": "node scripts/verify-banking77-benchmark.mjs",
+    "verify:decision-freeze": "node scripts/verify-decision-freeze.mjs",
+    "verify:decision-sufficiency": "node scripts/verify-decision-sufficiency.mjs --self-test && node scripts/verify-decision-sufficiency.mjs --results benchmarks/decision-sufficiency/results/reference-v1 && node scripts/verify-decision-consumer.mjs --results benchmarks/decision-sufficiency/results/reference-v1",
     "verify:research": "node research/verify.mjs",
     "audit:dependencies": "npm audit --audit-level=high",
     "benchmark:banking77": "node scripts/run-banking77.mjs",
+    "benchmark:decision-sufficiency": "node scripts/run-decision-sufficiency.mjs",
     "smoke:package": "node scripts/package-smoke.mjs",
-    "check": "npm run typecheck && npm run test:coverage && npm run build && node dist/kea/cli.js evaluate && npm run verify:benchmark && npm run verify:research && npm run audit:dependencies && npm run smoke:package",
+    "check": "npm run typecheck && npm run test:coverage && npm run build && node dist/kea/cli.js evaluate && npm run verify:benchmark && npm run verify:decision-freeze && npm run verify:decision-sufficiency && npm run verify:research && npm run audit:dependencies && npm run smoke:package",
     "reproduce": "npm run check",
     "demo": "tsx examples/demo.ts",
     "kea": "tsx src/kea/cli.ts"

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "waggle.decision-sufficiency.failed-trial.v1",
+  "trial": 2,
+  "status": "preserved-excluded",
+  "freezeSha256": "4ea323ac5b9611c672ee639f4c7347a1520eae3da16d068bd8079ff269de928c",
+  "stageReached": "evaluation-complete-independent-verifier-incomplete",
+  "failure": "The independent verifier compared raw BANKING77 true-intent labels against wire-sanitized policy labels. The raw label reverted_card_payment? is intentionally represented as reverted_card_payment_ on the symbolic wire, so the secondary classifier-continuity audit stopped before accepting the otherwise complete evaluation.",
+  "scientificOutcomeObserved": true,
+  "scientificVerdictObserved": "H0_RETAINED",
+  "primaryGateFailureObserved": "adaptiveCoverageGainOverSafeK1",
+  "artifacts": {
+    "SHA256SUMS": "32f149c28b5a6013ca6e95d753841da731c9318eca3e6d459b88ca86ce9325aa",
+    "attacks.json": "6fc6c640e3ef5ad352e0312685f9f886d4d133ffdfb973f1aa8bb056b5e858c7",
+    "decisions.jsonl.gz": "6bb996fad76e807c5047a9af28f45387aa8727dadf58483f08441ca924575cea",
+    "environment.json": "538c96017b484f3ecb5f3b3a3b02edb6b1e17bc925035da9817bca5ce3a6b72b",
+    "evaluation.json": "e1746c116cddac34cbe17662d86242515f8f0f4ac7b792382814ba7c7e4d528f",
+    "policies.json": "fcb871a1affa1cf38486b019f3f5d57047d9f117dc89b821150cba2ad652020e",
+    "run.json": "29eb273e052be7e0d8a8dc5e606af4fa73ef28a180d8bd7efdde2bfda64e5f1d",
+    "samples.jsonl": "e8ed216b8f65ba09cca70a3b88326461144dbe21f535bab259cd983e3b9b9f19",
+    "vectors.jsonl": "0b56a66a41d5697a9bcc1257ce0774e5f130e16e9a2c06f1e3c934d6cf105859"
+  },
+  "correctionBoundary": "Trial 3 may change only the independent verifier and its freeze verifier so raw classifier label lineage is validated before applying the frozen wire sanitization. The question, source, model, vectors, policies, cases, controls, thresholds, certificate algorithm, evaluation, and primary result remain frozen.",
+  "authorityGranted": false
+}

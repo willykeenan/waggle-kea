@@ -4,8 +4,8 @@
 [![BANKING77 benchmark](https://github.com/willykeenan/waggle-kea/actions/workflows/benchmark.yml/badge.svg)](https://github.com/willykeenan/waggle-kea/actions/workflows/benchmark.yml)
 [![CodeQL](https://github.com/willykeenan/waggle-kea/actions/workflows/codeql.yml/badge.svg)](https://github.com/willykeenan/waggle-kea/actions/workflows/codeql.yml)
 
-Inspectable machine coordination, a fail-closed audit layer, and a reproducible
-banking intent-classification benchmark.
+Inspectable machine coordination, a fail-closed audit layer, and reproducible
+experiments in classification and certified task-sufficient handoffs.
 
 - **Waggle** defines compact, typed coordination packets built from symbolic
   state deltas and content-addressed references.
@@ -14,6 +14,9 @@ banking intent-classification benchmark.
 - **The BANKING77 benchmark** trains matched classifiers on public banking
   queries, measures uncertainty and selective routing, and audits every frozen
   prediction through direct, JSON, and Waggle/Kea paths.
+- **The decision-sufficiency benchmark** asks how much of a frozen prediction
+  vector must be disclosed before a separate consumer can prove that every
+  completion of the omitted probability mass yields the same action.
 
 ## Results at a glance
 
@@ -25,12 +28,41 @@ banking intent-classification benchmark.
 | Typo stress | Candidate macro-F1 `0.8565`; word-only `0.7728` | One deterministic synthetic deletion, not natural-noise validation |
 | Audited handoff | 3,050/3,050 routes agreed; 0 clean rejections; 0 authority grants | Exact routing parity is not a model-quality claim |
 | Fault suite | 384/384 specified detectable mutations rejected; 0 false accepts | Finite suite, not adversarial-security validation |
+| Certified partial handoff | Safe continuation on `35,013/36,600` (`95.66%`) non-tied decisions with 0 action mismatches | Prospective secondary analysis; one frozen classifier, dataset, and synthetic policy family |
+| Preregistered v0.3 verdict | Coverage gain over safe `k=1`: `+6.65` percentage points, 95% case-bootstrap interval `[+5.86, +7.45]` | `H0_RETAINED`: missed the frozen `+10`-point gate |
+| Strong compact control | Median expected-cost summary `390` bytes; certificate `680` bytes; full vector `491.5` bytes | No encoding, compression, token, cost, or overall-efficiency advantage |
 
 The complete result includes all five fixed seeds, 2,000 paired bootstrap
 draws, accuracy, top-3 accuracy, log loss, multiclass Brier score, 15-bin ECE,
 risk–coverage curves, all 77 per-intent scores, a shuffled-label control, and
 text-free case-level predictions. See
 [`benchmarks/banking77/`](benchmarks/banking77/README.md).
+
+## Certified task-sufficient handoffs
+
+Given a frozen probability vector and a four-action cost policy, Waggle reveals
+the largest probabilities one at a time. For each candidate action it includes
+an integer-exact lower bound that assigns all omitted mass to the worst possible
+omitted label. Kea independently reconstructs that bound and qualifies the
+handoff only when the chosen action remains the unique optimum for **every**
+valid completion. Otherwise the consumer returns `insufficient_confidence`.
+
+```mermaid
+flowchart LR
+    V["Frozen 77-class vector"] --> P["Waggle partial certificate"]
+    V --> K["Kea independent verification"]
+    P --> K
+    K -->|qualified projection only| C["Restricted consumer"]
+    K -->|unresolved or invalid| R["Refuse"]
+```
+
+The v0.3 study evaluated 3,050 BANKING77 cases under 12 deterministic,
+output-blind four-action policies. It found exact action parity for every
+qualified handoff and caught 421 decisions where naive top-1 was not enough.
+It also rejected the primary hypothesis because adaptive coverage improved
+over a safe one-component certificate by only 6.65 points, below the frozen
+10-point threshold. See the [result report](benchmarks/decision-sufficiency/RESULT.md)
+and [preregistered protocol](benchmarks/decision-sufficiency/PROTOCOL.md).
 
 ## Reproduce
 
@@ -47,6 +79,7 @@ To retrain the matched classifiers and generate a fresh local result:
 
 ```bash
 npm run benchmark:banking77
+npm run benchmark:decision-sufficiency
 ```
 
 The first benchmark run creates an ignored Python environment, installs the
@@ -159,6 +192,7 @@ console.log(result.interpretation.authorityGranted); // false
 | Path | Purpose |
 | --- | --- |
 | [`benchmarks/banking77/`](benchmarks/banking77/README.md) | Reproducible classifier, protocol, controls, reference results, and audited handoff |
+| [`benchmarks/decision-sufficiency/`](benchmarks/decision-sufficiency/README.md) | Preregistered certificate theorem, matched controls, full reference evidence, and independent verifier |
 | `src/waggle/` | Typed packets, validation, encoding, composition, and message construction |
 | `src/kea/` | Registry, qualification service, atomic replay ledger, CLI, API, and viewer |
 | `tests/` | Protocol-integrity, HTTP-boundary, benchmark-evidence, and failure-mode tests |
@@ -178,6 +212,13 @@ one model/hardware run that beat repeated full-text reconstruction but did not
 beat the stronger cached-prefix or warmed fresh-native controls. It does not
 establish a universal agent language, cross-model compatibility, or token,
 cost, latency, memory, energy, or overall-efficiency savings.
+
+The decision-sufficiency result is also bounded. It proves a robust action only
+for a frozen finite cost policy and omitted-mass simplex. It does not prove a
+globally minimum message, semantic compression, privacy, cross-model or
+cross-domain generalization, or a universal agent communication language. Its
+preregistered primary hypothesis was rejected, and the strongest compact
+informed control was smaller than the certificate.
 
 ## License and citation
 

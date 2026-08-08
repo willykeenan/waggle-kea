@@ -60,7 +60,7 @@ try {
   const installedPackage = JSON.parse(
     readFileSync(join(consumerRoot, "node_modules/waggle-kea/package.json"), "utf8")
   );
-  assert.equal(installedPackage.version, "0.2.0");
+  assert.equal(installedPackage.version, "0.3.0");
   process.stdout.write("Packaged root, subpath exports, and CLI passed in a clean consumer.\n");
 } finally {
   if (archivePath) rmSync(archivePath, { force: true });

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "waggle.decision-sufficiency.failed-trial.v1",
+  "trial": 1,
+  "status": "preserved-excluded",
+  "freezeSha256": "8003adaf3e4613ffad2c3bfe0a075588ee89420f9a98d1a838a8ae8cfeecd668",
+  "stageReached": "runner-complete-evaluator-not-started",
+  "failure": "Python and JavaScript emitted different canonical number lexemes inside the rich run body, so the evaluator rejected the Python content ID before reading decision outcomes.",
+  "scientificOutcomeObserved": false,
+  "artifacts": {
+    "environment.json": "10cacf56143a3737512e89839738c258150a665d4635e3ede278168fcca58714",
+    "run.json": "fab3fc346d5e970c199ac8f6d3f829c27d1e2332b6801c4027c47ff2a17ee029",
+    "vectors.jsonl": "0b56a66a41d5697a9bcc1257ce0774e5f130e16e9a2c06f1e3c934d6cf105859"
+  },
+  "correctionBoundary": "Trial 2 may change only the cross-runtime run-identity manifest. The question, source, model, policies, cases, controls, thresholds, certificate algorithm, and analysis remain frozen.",
+  "authorityGranted": false
+}

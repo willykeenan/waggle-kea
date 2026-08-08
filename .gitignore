@@ -3,3 +3,6 @@ dist/
 .waggle-kea/
 *.log
 .DS_Store
+benchmarks/decision-sufficiency/.venv/
+benchmarks/decision-sufficiency/.cache/
+benchmarks/decision-sufficiency/results/local-v1/

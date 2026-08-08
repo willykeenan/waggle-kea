@@ -1,9 +1,9 @@
 cff-version: 1.2.0
 message: "If you use this reference implementation, please cite it using this metadata."
-title: "Waggle + Kea: Inspectable Machine Coordination"
+title: "Waggle + Kea: Certified Task-Sufficient Machine Handoffs"
 type: software
-version: 0.2.0
-date-released: 2026-08-05
+version: 0.3.0
+date-released: 2026-08-08
 authors:
   - family-names: Keenan
     given-names: William
@@ -14,6 +14,8 @@ keywords:
   - machine learning evaluation
   - intent classification
   - uncertainty calibration
+  - decision sufficiency
+  - selective prediction
   - multi-agent systems
   - machine coordination
   - AI observability

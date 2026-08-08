@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "waggle.decision-sufficiency.failed-trial.v1",
+  "trial": 5,
+  "status": "preserved-excluded",
+  "freezeSha256": "270dafa5f9d8124d6f80cb37a8883bf35e078945dc850a19583d1280c53a80aa",
+  "stageReached": "evaluation-and-independent-decision-verification-complete-fresh-consumer-verification-incomplete",
+  "failure": "The fresh restricted consumer returned the correct action and a richer canonical receipt containing its schema and lineage IDs. The verifier compared that full receipt directly with the frozen sample's intentionally reduced three-field projection, so it failed after the complete decision audit had passed.",
+  "scientificOutcomeObserved": true,
+  "scientificVerdictObserved": "H0_RETAINED",
+  "primaryGateFailureObserved": "adaptiveCoverageGainOverSafeK1",
+  "artifacts": {
+    "SHA256SUMS": "52858e2e39d0127ab3563f990fcc17445c6bf3bc57c7d28a7e7fc02495c44782",
+    "attacks.json": "6fc6c640e3ef5ad352e0312685f9f886d4d133ffdfb973f1aa8bb056b5e858c7",
+    "decisions.jsonl.gz": "6bb996fad76e807c5047a9af28f45387aa8727dadf58483f08441ca924575cea",
+    "environment.json": "2d575f4866268fdc7a7527539500d36401a414e902a0d8c7888f434495d3fec8",
+    "evaluation.json": "e1746c116cddac34cbe17662d86242515f8f0f4ac7b792382814ba7c7e4d528f",
+    "policies.json": "fcb871a1affa1cf38486b019f3f5d57047d9f117dc89b821150cba2ad652020e",
+    "run.json": "29eb273e052be7e0d8a8dc5e606af4fa73ef28a180d8bd7efdde2bfda64e5f1d",
+    "samples.jsonl": "e8ed216b8f65ba09cca70a3b88326461144dbe21f535bab259cd983e3b9b9f19",
+    "vectors.jsonl": "0b56a66a41d5697a9bcc1257ce0774e5f130e16e9a2c06f1e3c934d6cf105859"
+  },
+  "correctionBoundary": "Trial 6 may change only the fresh-consumer verifier and freeze verifier so the full receipt's closed-world lineage is validated before comparing its canonical restricted projection. All scientific inputs, outputs, gates, and the primary result remain frozen.",
+  "authorityGranted": false
+}

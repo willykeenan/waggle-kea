@@ -347,19 +347,29 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
     model = word_character_pipeline(classifier_config, seed)
     model.fit(x_train, y_train)
     probabilities = model.predict_proba(x_test)
+    # Label order must match predict_proba column order (sklearn classes_), not categories.json order.
     label_ids = [str(label) for label in model.named_steps["classifier"].classes_.tolist()]
     if len(label_ids) != 77 or set(label_ids) != set(categories):
         raise RuntimeError("Classifier label inventory drifted from BANKING77 categories")
+    if len(label_ids) != len(set(label_ids)):
+        raise RuntimeError("Classifier label inventory contains duplicates")
+    if len(test) != len(probabilities):
+        raise RuntimeError(
+            f"Primary test row count ({len(test)}) does not match predict_proba rows ({len(probabilities)})"
+        )
 
     output.mkdir(parents=True, exist_ok=True)
     vectors_path = output / "vectors.jsonl"
     lines: list[str] = []
+    case_ids: set[str] = set()
     for row, probability_row in zip(test, probabilities):
         units = quantize_largest_remainder(probability_row.tolist(), PROBABILITY_SCALE)
         validate_probability_vector(units, PROBABILITY_SCALE, label_count=77)
         vector_id = decision_vector_id(units, PROBABILITY_SCALE)
         normalized = normalize_text(row["text"])
         case_id = f"banking77_{sha256_text(normalized)[:20]}"
+        require(case_id not in case_ids, f"duplicate caseId after normalization: {case_id}")
+        case_ids.add(case_id)
         record = {
             "schemaVersion": VECTOR_SCHEMA,
             "caseId": case_id,
@@ -368,6 +378,7 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
             "trueIntent": row["category"],
             "vectorId": vector_id,
             "probabilityScale": PROBABILITY_SCALE,
+            # Same order as probabilities[] indices and run.labelIds.
             "labelIds": label_ids,
             "probabilities": units,
             "textIncluded": False,
@@ -375,6 +386,8 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
         }
         # Never emit source text.
         require("text" not in record, "source text leaked into vector artifact")
+        require("sourceText" not in record, "source text leaked into vector artifact")
+        require("utterance" not in record, "source text leaked into vector artifact")
         require(record["textIncluded"] is False, "vector artifact must mark text as excluded")
         lines.append(canonical_json(record))
 
@@ -388,6 +401,10 @@ def run_full(offline: bool, cache: Path, output: Path) -> int:
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "author": "William Keenan",
         "evidenceClass": "preregistered-prospective-secondary-analysis",
+        # Top-level inventory is required by the evaluator loader (run.labelIds / run.probabilityScale).
+        # Order is classifier class order and must match every vector's probabilities[] indices.
+        "labelIds": label_ids,
+        "probabilityScale": PROBABILITY_SCALE,
         "source": {
             "dataset": source["dataset"],
             "upstreamRepository": source["upstreamRepository"],
@@ -542,6 +559,15 @@ def run_self_test() -> int:
     require(vector_id.startswith("decisionvector_"), "vector identity prefix")
     require(len(vector_id) == len("decisionvector_") + 20, "vector identity length")
     require(all(character in "0123456789abcdef" for character in vector_id.split("_", 1)[1]), "vector identity hex")
+    # Canonical object hashing must be independent of key insertion order.
+    _assert_equal(
+        content_id(
+            "decisionvector",
+            {"probabilities": list(vector), "probabilityScale": scale},
+        ),
+        vector_id,
+        "vector identity key-order independence",
+    )
 
     other = [600_000, 200_000, 100_000, 100_000]
     other_id = decision_vector_id(other, scale)

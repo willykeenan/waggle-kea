@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "waggle.decision-sufficiency.failed-trial.v1",
+  "trial": 4,
+  "status": "preserved-excluded",
+  "freezeSha256": "12a62ebf68f28f282e57c3834493609deeb24a5e3087d21bade2e08510e0d53e",
+  "stageReached": "pre-output-independent-verification-of-preserved-trial-2",
+  "failure": "The independent verifier expected the full restricted-consumer receipt in readable sample rows, while the frozen evaluator intentionally stores the same canonical three-field restricted projection used in complete decision rows. It rejected the first sample before any Trial 4 experiment output was generated.",
+  "scientificOutcomeObserved": false,
+  "artifacts": {},
+  "correctionBoundary": "Trial 5 may align only the verifier's sample projection and its no-score self-test fixture with the frozen evaluator's three-field restricted consumer projection. All scientific inputs, outputs, gates, and the Trial 2 primary result remain frozen.",
+  "authorityGranted": false
+}

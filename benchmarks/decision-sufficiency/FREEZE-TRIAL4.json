@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "waggle.decision-sufficiency.freeze.v1",
+  "trial": 4,
+  "frozenAt": "2026-08-08T01:43:54Z",
+  "author": "William Keenan",
+  "basePublicCommit": "2df00e89a39039b649365908249544adbfa02a1e",
+  "implementationParentCommit": "57d7506ccfb1cdce2c2c484a1d0e4833a74e3452",
+  "evidenceClass": "preregistered-prospective-secondary-analysis-with-post-output-verifier-correction",
+  "scoredOutputsObservedBeforeFreeze": true,
+  "scientificContractChangedAfterOutput": false,
+  "supersedes": {
+    "freezeSha256": "f18d1538738d40058d2e615980b2a775ac062439f61887d6d18c7e1744477f23",
+    "failedTrialRecordSha256": "9bfb7907a6da6654d459e6797895b40156e66afc9e20457c5447bd9958ad1775",
+    "reason": "Trial 3 stopped in the verifier self-test before new experiment output because its synthetic vectors lacked the now-mandatory raw label inventory. Trial 4 adds that inventory only to no-score verifier fixtures."
+  },
+  "unchangedScientificContract": [
+    "research question",
+    "source and classifier",
+    "probability quantization",
+    "policy family",
+    "cases and controls",
+    "certificate algorithm",
+    "primary thresholds",
+    "bootstrap and secondary analysis",
+    "Trial 2 scientific verdict"
+  ],
+  "primaryHypothesis": "H1_TASK_SUFFICIENCY_SUPPORTED only if every frozen admission gate passes; otherwise H0_RETAINED",
+  "fixedOutputDirectory": "benchmarks/decision-sufficiency/results/reference-v1",
+  "files": {
+    ".github/workflows/benchmark.yml": "78ec3b2c61dac251f0161006bdd7f12fc5c78abb3f59d4a3c440607f9d01dae7",
+    ".github/workflows/ci.yml": "b1dc79fa18cba58482adc6c1db89650aa79fac7be0f340a8ec9e439738314ad1",
+    "benchmarks/decision-sufficiency/PROTOCOL.md": "1871ea2372e85d9ee54e194f71e997b5fd373f633649f555053dbf2fcb5ff6dc",
+    "benchmarks/decision-sufficiency/README.md": "7a14397822043f963e5d9b2cdd75c8fb94e3cbfe37d00b34d04236f37719c76d",
+    "benchmarks/decision-sufficiency/config.v1.json": "aa244d92439eae305bbb5dfa7235ab11318e9f853ceb6863c8328d13d5f42c93",
+    "benchmarks/decision-sufficiency/evaluate.ts": "75d3bbd4ac396db966f32565bf404506078d930eaab05dcdbf33e81d9e5255ab",
+    "benchmarks/decision-sufficiency/run.py": "ca55ed56942c0bbe856ebd32c9bb2d475d735b310ac342d35e7d67f980e6a63e",
+    "package-lock.json": "d2ade18fffc8c3070e3aebeda1ae324e6b0cd526cb89b37fdd62c495c74f9bc4",
+    "package.json": "7185ac1a91836edd8e6eb98e6ea5393fcd7b090be6d022740cda215d8ee2a3d5",
+    "scripts/consume-decision-certificate.ts": "4cd5eed362e3b35738a6b4c16b034f01e724a0dcedff6d41fc4bc348a8c82d8e",
+    "scripts/kill-check-decision-evaluator.mjs": "c1d249e914e194590b6ad14d50b584b98ea5237d9d3642c4db8cdf7de46ca22f",
+    "scripts/kill-check-decision-runner.mjs": "2df243c68fc3f98aa959322812e54b171df13b8122b3bbc7b94172902c703195",
+    "scripts/kill-check-decision-verifier.mjs": "a367331f136288c0d4399ce488c9c10e99b58a5db74f2fedd4d28f9fcbeabbc5",
+    "scripts/run-decision-sufficiency.mjs": "250763d9db00a07a2d2d8562349731dd8a510737a19ac17c142dd8e35f0a4c30",
+    "scripts/verify-decision-consumer.mjs": "17d9cef74868703d3eb6bfad1a79ce499ca1063f8d72c213f72a2a2c2e2b2057",
+    "scripts/verify-decision-freeze.mjs": "0ddf41d237876053be4dac9e939e7a476f8980531237ab4c558b957ddb19b1e0",
+    "scripts/verify-decision-sufficiency.mjs": "239e5d6be1755daa90ee3a05906309d7ef6f55a9daa95888d6456452fd3d4281",
+    "src/index.ts": "4890a5a89012e5dfce06a16d9a9fd1ae22b442ecbee04d80c4b70142f0675a9a",
+    "src/kea/decision-certificate.ts": "f36fe53c0e256e476ee019980581eab73f63926614dcfb42d4f70422be446bc4",
+    "src/kea/index.ts": "ccfa89f2b0d1340f247bb392c8c89fb4f0faa0ff98eef4892c804bf13aad4a6f",
+    "src/waggle/decision-certificate.ts": "6915b9e470619277542e0482945e2f55b39c2ef333d61a50c741bf675dad4a3a",
+    "src/waggle/index.ts": "d35471904281feebd98dac3282798fa154ec905ea4ad00e05469c406ec984416",
+    "tests/decision-certificate.test.ts": "de6fec0bfc1a0967854b3f3a8da7538df41a8a1955cc772c138a6096f8af2147",
+    "tests/decision-consumer-process.test.ts": "ae44f7c40d7c93badb8fc589697c69a43dbe05c7640da571c71ae07f951129a1",
+    "tsconfig.json": "657c87e4f47f7fa49d6d2528b725792c303fd86c76890a54732e9aa73e192a83"
+  },
+  "nonClaims": [
+    "No globally minimum message is preregistered.",
+    "No unique encoding or compression advantage is preregistered.",
+    "No token, credit, energy, economic, or overall-efficiency claim is preregistered.",
+    "No independent model replication, privacy, production, or authority claim is preregistered."
+  ],
+  "authorityGranted": false
+}

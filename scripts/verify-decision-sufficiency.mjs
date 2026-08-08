@@ -134,6 +134,10 @@ function contentId(prefix, value) {
   return `${prefix}_${hashCanonical(value).slice(0, 20)}`;
 }
 
+function wireLabel(label) {
+  return label.replace(/[^a-zA-Z0-9._:/@-]/g, "_");
+}
+
 // ---------------------------------------------------------------------------
 // Frozen config loader
 // ---------------------------------------------------------------------------
@@ -1255,6 +1259,7 @@ function verifyResultsDirectory(resultsDir, config) {
   ]);
   requireCondition(vectors.length >= 1, "vectors.jsonl is empty");
   const vectorByCase = new Map();
+  let rawLabelIds = null;
   for (const row of vectors) {
     requireCondition(
       row !== null && typeof row === "object" && !Array.isArray(row),
@@ -1272,6 +1277,30 @@ function verifyResultsDirectory(resultsDir, config) {
     requireCondition(row.schemaVersion === VECTOR_SCHEMA, "vector schema mismatch");
     requireCondition(typeof row.caseId === "string" && SYMBOLIC_ID.test(row.caseId), "vector caseId invalid");
     requireCondition(row.textIncluded === false, "vector textIncluded must be false");
+    requireCondition(
+      Array.isArray(row.labelIds) && row.labelIds.length === policiesArtifact.labelIds.length,
+      `vector ${row.caseId} raw label lineage is missing`
+    );
+    requireCondition(
+      row.labelIds.every((label) => typeof label === "string" && label.length > 0),
+      `vector ${row.caseId} raw label lineage is invalid`
+    );
+    if (rawLabelIds === null) {
+      rawLabelIds = [...row.labelIds];
+      requireCondition(
+        new Set(rawLabelIds).size === rawLabelIds.length,
+        "raw label lineage must be unique"
+      );
+      requireCondition(
+        canonicalJson(rawLabelIds.map(wireLabel)) === canonicalJson(policiesArtifact.labelIds),
+        "raw label lineage does not map exactly to policy wire labels"
+      );
+    } else {
+      requireCondition(
+        canonicalJson(row.labelIds) === canonicalJson(rawLabelIds),
+        `vector ${row.caseId} raw label lineage drifted`
+      );
+    }
     requireCondition(
       Array.isArray(row.probabilities) && row.probabilities.length === policiesArtifact.labelIds.length,
       `vector ${row.caseId} length mismatch`
@@ -1818,7 +1847,7 @@ function verifyResultsDirectory(resultsDir, config) {
   );
   const expectedContinuity = classifierContinuity(
     vectors,
-    policiesArtifact.labelIds,
+    rawLabelIds,
     config.continuityReference
   );
   requireCondition(
@@ -1945,11 +1974,8 @@ function verifyResultsDirectory(resultsDir, config) {
       `sample qualification drift for ${sample.caseId}`
     );
     const restricted = {
-      schemaVersion: "kea.restricted-decision.v1",
       disposition: expected.disposition === "continue" ? "continue" : "insufficient_confidence",
       actionId: expected.disposition === "continue" ? expected.actionId : null,
-      certificateId: expected.certificateId,
-      qualificationId: qualification.qualificationId,
       authorityGranted: false,
     };
     requireCondition(
@@ -2088,6 +2114,7 @@ function materializeValidResults(dir, tamper = {}) {
     trueIntent: syntheticLabels[
       item.probabilities.indexOf(Math.max(...item.probabilities))
     ],
+    labelIds: [...syntheticLabels],
     textIncluded: false,
   }));
 
@@ -2328,11 +2355,8 @@ function materializeValidResults(dir, tamper = {}) {
       certificate: row.adaptive.certificate,
       qualification: qualificationForCertificate(row.adaptive.certificate),
       restricted: {
-        schemaVersion: "kea.restricted-decision.v1",
         disposition: row.restricted.disposition,
         actionId: row.restricted.actionId,
-        certificateId: row.adaptive.certificate.certificateId,
-        qualificationId: row.qualification.qualificationId,
         authorityGranted: false,
       },
       authorityGranted: false,
